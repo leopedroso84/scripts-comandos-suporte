@@ -44,7 +44,7 @@ action 'filter.calendarevents' getNearCalendarEvents(): array {
     "WFContentItemSortProperty": "Start Date"
 }
 
-comment('ESCALA ALARME - versao enxuta. Ancora do ciclo: segunda-feira 17/08/2026. Ciclo: 7 dias de plantao + 14 dias sem plantao. Executar diariamente as 22:00 para preparar AMANHA.')
+comment('ESCALA ALARME - versao enxuta v2. Ancora do ciclo: segunda-feira 17/08/2026. Ciclo: 7 dias de plantao + 14 dias sem plantao. Executar diariamente as 22:00 para preparar AMANHA.')
 
 /* DATA E CICLO */
 const agora = currentDate()
