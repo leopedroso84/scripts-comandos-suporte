@@ -1,0 +1,47 @@
+name: Build Escala Alarme
+
+on:
+  push:
+    branches:
+      - chatgpt/escala-alarme-build-20260822
+    paths:
+      - 'Escala_Alarme.cherri'
+      - '.github/workflows/build-escala-alarme.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v6
+
+      - name: Checkout Cherri v2.3.0
+        uses: actions/checkout@v6
+        with:
+          repository: electrikmilk/cherri
+          ref: v2.3.0
+          path: cherri
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: cherri/go.sum
+
+      - name: Compile and sign Shortcut
+        run: |
+          go run ./cherri Escala_Alarme.cherri --debug
+          echo '--- generated files ---'
+          find . -maxdepth 2 -type f \( -name '*.shortcut' -o -name '*.plist' -o -name '*processed*.cherri' \) -print
+
+      - name: Upload generated Shortcut
+        uses: actions/upload-artifact@v4
+        with:
+          name: escala-alarme-build
+          if-no-files-found: error
+          path: |
+            *.shortcut
+            *.plist
+            *_processed.cherri
+            Escala_Alarme.cherri
