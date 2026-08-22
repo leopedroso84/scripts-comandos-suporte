@@ -3,7 +3,6 @@
 
 #include 'actions/calendar'
 #include 'actions/math'
-#include 'actions/settings'
 #include 'actions/text'
 
 enum timeBetweenUnit {
@@ -16,7 +15,13 @@ action 'gettimebetweendates' getTimeBetweenDates(
     timeBetweenUnit unit: 'WFTimeUntilUnit'
 ): number
 
-action 'filter.calendarevents' getUpcomingCalendarEvents(): array {
+/*
+Busca uma janela curta. A validacao exata de data e feita logo depois,
+comparando yyyy-MM-dd do evento com yyyy-MM-dd de amanha.
+Assim, mesmo que o iOS renderize a janela como varios dias, somente
+um evento de AMANHA pode alterar o alarme.
+*/
+action 'filter.calendarevents' getNearCalendarEvents(): array {
     "WFContentItemFilter": {
         "Value": {
             "WFActionParameterFilterPrefix": 1,
@@ -39,238 +44,126 @@ action 'filter.calendarevents' getUpcomingCalendarEvents(): array {
     "WFContentItemSortProperty": "Start Date"
 }
 
-comment('ESCALA ALARME - ciclo de 21 dias. Semana-base de plantao: 17/08/2026 a 23/08/2026. Executar diariamente as 22:00 para preparar o dia seguinte.')
+comment('ESCALA ALARME - versao enxuta. Ancora do ciclo: segunda-feira 17/08/2026. Ciclo: 7 dias de plantao + 14 dias sem plantao. Executar diariamente as 22:00 para preparar AMANHA.')
 
+/* DATA E CICLO */
 const agora = currentDate()
 const amanha = adjustDate("{agora}", "Add", qty(1, "days"))
+const amanhaData = formatDate("{amanha}", "Custom", "yyyy-MM-dd")
 const dataBase = date("2026-08-17")
 const epoch = date("1970-01-01")
-
 const amanhaSeg = getTimeBetweenDates("{amanha}", "{epoch}", "Seconds")
 const baseSeg = getTimeBetweenDates("{dataBase}", "{epoch}", "Seconds")
 const diferencaSeg = amanhaSeg - baseSeg
 const diferencaDias = diferencaSeg / 86400
 const diasDesdeBase = floor(diferencaDias)
 const posCiclo = diasDesdeBase % 21
-const diaCiclo = posCiclo % 7
+const diaSemana = posCiclo % 7
 
-@semanaPlantao = false
+@plantao = false
 if posCiclo < 7 {
-    @semanaPlantao = true
+    @plantao = true
 }
 
-@alarmMode = 0
-if @semanaPlantao == true {
-    if diaCiclo < 5 {
-        @alarmMode = 1
+/*
+MODO DO ALARME:
+0 = nenhum
+1 = 07:00
+2 = 07:45
+
+A ancora comeca numa segunda-feira, portanto:
+0 seg, 1 ter, 2 qua, 3 qui, 4 sex, 5 sab, 6 dom.
+*/
+@modo = 0
+if @plantao == true {
+    if diaSemana < 5 {
+        @modo = 1
     }
-    if diaCiclo == 5 {
-        @alarmMode = 0
-    }
-    if diaCiclo == 6 {
-        @alarmMode = 2
+    if diaSemana == 6 {
+        @modo = 2
     }
 } else {
-    if diaCiclo < 6 {
-        @alarmMode = 1
-    }
-    if diaCiclo == 6 {
-        @alarmMode = 0
+    if diaSemana < 6 {
+        @modo = 1
     }
 }
 
-@eventoEspecial = false
-@nomeEspecial = ""
-@eventos = getUpcomingCalendarEvents()
+/* CALENDARIO: UMA REGRA GENERICA DE FERIADO */
+@especial = false
+@motivo = "dia normal"
+@eventos = getNearCalendarEvents()
 
 for evento in @eventos {
-    const tituloRaw = getEventDetail(@evento, "Title")
-    @titulo = lowercase("{tituloRaw}")
+    const inicioEvento = getEventDetail(@evento, "Start Date")
+    const dataEvento = formatDate("{inicioEvento}", "Custom", "yyyy-MM-dd")
 
-    const calendarioRaw = getEventDetail(@evento, "Calendar")
-    @calendarioNome = lowercase("{calendarioRaw}")
+    if dataEvento == amanhaData {
+        const calendarioRaw = getEventDetail(@evento, "Calendar")
+        @calendario = lowercase("{calendarioRaw}")
+        @calendarioFeriado = false
 
-    @calendarioFeriados = false
-    if @calendarioNome contains "feriado" {
-        @calendarioFeriados = true
-    }
-    if @calendarioNome contains "holiday" {
-        @calendarioFeriados = true
-    }
-    if @calendarioNome contains "jales" {
-        @calendarioFeriados = true
-    }
-
-    if @calendarioFeriados == true {
-        @feriadoComum = false
-
-        if @titulo contains "ano novo" {
-            @feriadoComum = true
+        if @calendario contains "feriado" {
+            @calendarioFeriado = true
         }
-        if @titulo contains "confraterniza" {
-            @feriadoComum = true
+        if @calendario contains "holiday" {
+            @calendarioFeriado = true
         }
-        if @titulo contains "paixão" {
-            @feriadoComum = true
-        }
-        if @titulo contains "paixao" {
-            @feriadoComum = true
-        }
-        if @titulo contains "sexta-feira santa" {
-            @feriadoComum = true
-        }
-        if @titulo contains "tiradentes" {
-            @feriadoComum = true
-        }
-        if @titulo contains "dia do trabalho" {
-            @feriadoComum = true
-        }
-        if @titulo contains "corpus christi" {
-            @feriadoComum = true
-        }
-        if @titulo contains "independência do brasil" {
-            @feriadoComum = true
-        }
-        if @titulo contains "independencia do brasil" {
-            @feriadoComum = true
-        }
-        if @titulo contains "nossa senhora aparecida" {
-            @feriadoComum = true
-        }
-        if @titulo contains "finados" {
-            @feriadoComum = true
-        }
-        if @titulo contains "proclamação da república" {
-            @feriadoComum = true
-        }
-        if @titulo contains "proclamacao da republica" {
-            @feriadoComum = true
-        }
-        if @titulo contains "consciência negra" {
-            @feriadoComum = true
-        }
-        if @titulo contains "consciencia negra" {
-            @feriadoComum = true
-        }
-        if @titulo == "natal" {
-            @feriadoComum = true
-        }
-        if @titulo == "dia de natal" {
-            @feriadoComum = true
-        }
-        if @titulo contains "revolução constitucionalista" {
-            @feriadoComum = true
-        }
-        if @titulo contains "revolucao constitucionalista" {
-            @feriadoComum = true
-        }
-        if @titulo contains "9 de julho" {
-            @feriadoComum = true
-        }
-        if @titulo contains "aniversário de jales" {
-            @feriadoComum = true
-        }
-        if @titulo contains "aniversario de jales" {
-            @feriadoComum = true
-        }
-        if @titulo contains "fundação de jales" {
-            @feriadoComum = true
-        }
-        if @titulo contains "fundacao de jales" {
-            @feriadoComum = true
-        }
-        if @titulo contains "assunção de nossa senhora" {
-            @feriadoComum = true
-        }
-        if @titulo contains "assuncao de nossa senhora" {
-            @feriadoComum = true
+        if @calendario contains "jales" {
+            @calendarioFeriado = true
         }
 
-        if @feriadoComum == true {
-            @eventoEspecial = true
-            @nomeEspecial = "{tituloRaw}"
-        }
+        if @calendarioFeriado == true {
+            const tituloRaw = getEventDetail(@evento, "Title")
+            @titulo = lowercase("{tituloRaw}")
+            @ignorar = false
 
-        if @titulo contains "carnaval" {
-            if diaCiclo == 1 {
-                @eventoEspecial = true
-                @nomeEspecial = "{tituloRaw}"
+            /* Segunda de Carnaval e dia normal para esta escala. */
+            if diaSemana == 0 {
+                if @titulo contains "carnaval" {
+                    @ignorar = true
+                }
             }
-        }
 
-        if @titulo contains "cinzas" {
-            if diaCiclo == 2 {
-                @eventoEspecial = true
-                @nomeEspecial = "{tituloRaw}"
+            if @ignorar == false {
+                @especial = true
+                @motivo = "{tituloRaw}"
             }
         }
     }
 }
 
-if @eventoEspecial == true {
-    if @semanaPlantao == true {
-        @alarmMode = 2
-    } else {
-        @alarmMode = 0
+/* Feriado / Carnaval de terca / Cinzas: plantao 07:45; fora do plantao, folga. */
+if @especial == true {
+    @modo = 0
+    if @plantao == true {
+        @modo = 2
     }
 }
 
-@found0700 = false
-@found0745 = false
-@alarmes = getAlarms()
+/*
+As cinco marcacoes PATCH abaixo sao substituidas no build por acoes
+reais colhidas de atalhos atuais do iOS. Isso evita os App Intents
+antigos do catalogo do Cherri que o iPhone mostrou como desconhecidos.
+*/
+comment('PATCH_DESLIGAR_0700')
+comment('PATCH_DESLIGAR_0745')
 
-for alarme in @alarmes {
-    @nomeAlarme = "{@alarme['Label']}"
-
-    if @nomeAlarme == "Escala 07:00" {
-        @found0700 = true
-        turnOffAlarm(@alarme, false)
-        if @alarmMode == 1 {
-            turnOnAlarm(@alarme, false)
-        }
-    }
-
-    if @nomeAlarme == "Escala 07:45" {
-        @found0745 = true
-        turnOffAlarm(@alarme, false)
-        if @alarmMode == 2 {
-            turnOnAlarm(@alarme, false)
-        }
-    }
+if @modo == 1 {
+    comment('PATCH_LIGAR_0700')
 }
 
-if @alarmMode == 1 {
-    if @found0700 == false {
-        showNotification("ERRO: alarme 'Escala 07:00' nao foi encontrado.", "Escala Alarme", true)
-    }
+if @modo == 2 {
+    comment('PATCH_LIGAR_0745')
 }
 
-if @alarmMode == 2 {
-    if @found0745 == false {
-        showNotification("ERRO: alarme 'Escala 07:45' nao foi encontrado.", "Escala Alarme", true)
-    }
-}
+comment('PATCH_ATIVAR_SLEEP')
 
-@fimDormir = "09:00"
-if @alarmMode == 1 {
-    @fimDormir = "07:00"
-}
-if @alarmMode == 2 {
-    @fimDormir = "07:45"
-}
-setFocusMode("Sleep", "Time", "{@fimDormir}")
-
+/* Confirmacao silenciosa do que ficou preparado para amanha. */
 @resumo = "SEM ALARME"
-if @alarmMode == 1 {
+if @modo == 1 {
     @resumo = "07:00"
 }
-if @alarmMode == 2 {
+if @modo == 2 {
     @resumo = "07:45"
 }
-
-@motivo = "dia normal"
-if @eventoEspecial == true {
-    @motivo = "{@nomeEspecial}"
-}
-
 showNotification("Amanha: {@resumo} • {@motivo}", "Escala Alarme", false)
