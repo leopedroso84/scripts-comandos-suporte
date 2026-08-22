@@ -1,0 +1,120 @@
+name: Repair Escala Alarme Metadata
+
+on:
+  push:
+    branches:
+      - chatgpt/escala-alarme-build-20260822
+    paths:
+      - '.github/workflows/repair-escala-metadata.yml'
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Download previously validated build
+        uses: actions/download-artifact@v4
+        with:
+          name: escala-alarme-final
+          path: build
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 32595411788
+
+      - name: Inherit iOS 27 donor workflow metadata
+        run: |
+          python3 - <<'PY'
+          import plistlib
+          from pathlib import Path
+
+          p = Path('build')
+          sc = plistlib.loads((p/'Escala Alarme.plist').read_bytes())
+          donor = plistlib.loads((p/'donor.plist').read_bytes())
+
+          keys = [
+              'WFWorkflowClientVersion',
+              'WFWorkflowMinimumClientVersion',
+              'WFWorkflowMinimumClientVersionString',
+              'WFQuickActionSurfaces',
+              'WFWorkflowTypes',
+              'WFWorkflowOutputContentItemClasses',
+              'WFWorkflowHasShortcutInputVariables',
+              'WFWorkflowHasOutputFallback',
+          ]
+          for k in keys:
+              if k in donor:
+                  sc[k] = donor[k]
+
+          # Keep the generated workflow's input classes; only compatibility metadata
+          # is inherited from the iOS 27 donor.
+          assert sc['WFWorkflowClientVersion'] == donor['WFWorkflowClientVersion']
+          assert sc['WFWorkflowMinimumClientVersion'] == donor['WFWorkflowMinimumClientVersion']
+          assert sc['WFWorkflowMinimumClientVersionString'] == donor['WFWorkflowMinimumClientVersionString']
+
+          data_xml = plistlib.dumps(sc, fmt=plistlib.FMT_XML, sort_keys=False)
+          data_bin = plistlib.dumps(sc, fmt=plistlib.FMT_BINARY, sort_keys=False)
+          (p/'Escala Alarme.plist').write_bytes(data_xml)
+          (p/'Escala Alarme_unsigned.shortcut').write_bytes(data_bin)
+          print('Client:', sc['WFWorkflowClientVersion'])
+          print('Minimum:', sc['WFWorkflowMinimumClientVersion'])
+          PY
+
+      - name: Revalidate native actions and metadata
+        run: |
+          python3 - <<'PY'
+          import plistlib
+          from collections import Counter
+          from pathlib import Path
+
+          p=Path('build')
+          sc=plistlib.loads((p/'Escala Alarme.plist').read_bytes())
+          donor=plistlib.loads((p/'donor.plist').read_bytes())
+          actions=sc['WFWorkflowActions']
+          ids=Counter(a.get('WFWorkflowActionIdentifier','') for a in actions)
+          assert sc['WFWorkflowClientVersion'] == '5037.109'
+          assert sc['WFWorkflowMinimumClientVersion'] == 5001
+          assert sc['WFWorkflowMinimumClientVersionString'] == '5001'
+          assert ids['com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent'] == 4
+          assert ids['is.workflow.actions.dnd.set'] == 5
+          assert ids['is.workflow.actions.filter.calendarevents'] == 2
+
+          donor_alarm=[a for a in donor['WFWorkflowActions'] if a.get('WFWorkflowActionIdentifier')=='com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent'][0]
+          final_alarm=[a for a in actions if a.get('WFWorkflowActionIdentifier')=='com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent'][0]
+          for k in ['alarm','AppIntentDescriptor','ShowWhenRun']:
+              assert final_alarm['WFWorkflowActionParameters'].get(k) == donor_alarm['WFWorkflowActionParameters'].get(k)
+          print('Metadata + native action validation OK')
+          PY
+
+      - name: Sign repaired Shortcut
+        run: |
+          python3 - <<'PY'
+          import json, plistlib
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+
+          p=Path('build')
+          sc=plistlib.loads((p/'Escala Alarme.plist').read_bytes())
+          xml=plistlib.dumps(sc, fmt=plistlib.FMT_XML).decode('utf-8')
+          payload=json.dumps({'shortcutName':'Escala Alarme','shortcut':xml}).encode()
+          req=Request('https://hubsign.routinehub.services/sign', data=payload, headers={
+              'Content-Type':'application/json','User-Agent':'cherri/2.3.0',
+              'Origin':'https://routinehub.co','Referer':'https://routinehub.co/'}, method='POST')
+          with urlopen(req,timeout=45) as r:
+              signed=r.read()
+          if signed[:4] != b'AEA1':
+              raise SystemExit(f'Bad signature payload: {signed[:16]!r}')
+          (p/'Escala Alarme v2.shortcut').write_bytes(signed)
+          print('Signed:',len(signed),'bytes; AEA1 OK')
+          PY
+
+      - name: Upload repaired build
+        uses: actions/upload-artifact@v4
+        with:
+          name: escala-alarme-v2
+          if-no-files-found: error
+          path: |
+            build/Escala Alarme v2.shortcut
+            build/Escala Alarme.plist
+            build/Escala Alarme_unsigned.shortcut
+            build/donor.plist
