@@ -7,6 +7,12 @@ on:
     paths:
       - 'Escala_Alarme.cherri'
       - '.github/workflows/build-escala-alarme.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'Escala_Alarme.cherri'
+      - '.github/workflows/build-escala-alarme.yml'
   workflow_dispatch:
 
 permissions:
@@ -39,6 +45,7 @@ jobs:
           find . -maxdepth 1 -type f \( -name '*.shortcut' -o -name '*.plist' -o -name '*processed*.cherri' \) -print
 
       - name: Commit generated files to build branch
+        if: github.event_name == 'push'
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
