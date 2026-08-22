@@ -1,6 +1,12 @@
 name: Build Escala Alarme
 
 on:
+  push:
+    branches:
+      - chatgpt/escala-alarme-build-20260822
+    paths:
+      - 'Escala_Alarme.cherri'
+      - '.github/workflows/build-escala-alarme.yml'
   pull_request:
     branches:
       - main
