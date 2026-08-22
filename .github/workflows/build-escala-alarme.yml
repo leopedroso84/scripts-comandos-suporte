@@ -7,12 +7,6 @@ on:
     paths:
       - 'Escala_Alarme.cherri'
       - '.github/workflows/build-escala-alarme.yml'
-  pull_request:
-    branches:
-      - main
-    paths:
-      - 'Escala_Alarme.cherri'
-      - '.github/workflows/build-escala-alarme.yml'
   workflow_dispatch:
 
 permissions:
@@ -38,16 +32,89 @@ jobs:
           go-version: '1.24.x'
           cache-dependency-path: cherri/go.sum
 
-      - name: Compile and sign Shortcut
+      - name: Add current HubSign headers to Cherri
         run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('cherri/signing.go')
+          s = p.read_text()
+          needle = 'request.Header.Set("User-Agent", fmt.Sprintf("cherri/%s", version))'
+          replacement = needle + '\n\trequest.Header.Set("Origin", "https://routinehub.co")\n\trequest.Header.Set("Referer", "https://routinehub.co/")'
+          if needle not in s:
+              raise SystemExit('HubSign request header location not found')
+          p.write_text(s.replace(needle, replacement, 1))
+          PY
+
+      - name: Compile Shortcut
+        run: |
+          set +e
           cd cherri
           go run . ../Escala_Alarme.cherri --debug
+          STATUS=$?
           cd ..
+          set -e
+          echo "Cherri exit status: $STATUS"
+          test -f "Escala Alarme.plist"
+          test -f "Escala Alarme_unsigned.shortcut"
           echo '--- generated files ---'
           find . -maxdepth 1 -type f \( -name '*.shortcut' -o -name '*.plist' -o -name '*processed*.cherri' \) -print
 
+      - name: Sign with HubSign fallback
+        run: |
+          if [ -f "Escala Alarme.shortcut" ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+          p = Path('Escala Alarme.shortcut')
+          if p.read_bytes()[:4] != b'AEA1':
+              raise SystemExit('Existing signed file does not start with AEA1')
+          print('Signed file already created by Cherri')
+          PY
+            exit 0
+          fi
+
+          python3 - <<'PY'
+          import json
+          import plistlib
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+
+          src = Path('Escala Alarme.plist')
+          shortcut = plistlib.loads(src.read_bytes())
+          xml = plistlib.dumps(shortcut, fmt=plistlib.FMT_XML).decode('utf-8')
+          payload = json.dumps({
+              'shortcutName': 'Escala Alarme',
+              'shortcut': xml,
+          }).encode('utf-8')
+          req = Request(
+              'https://hubsign.routinehub.services/sign',
+              data=payload,
+              headers={
+                  'Content-Type': 'application/json',
+                  'User-Agent': 'cherri/2.3.0',
+                  'Origin': 'https://routinehub.co',
+                  'Referer': 'https://routinehub.co/',
+              },
+              method='POST',
+          )
+          with urlopen(req, timeout=45) as response:
+              signed = response.read()
+          if signed[:4] != b'AEA1':
+              raise SystemExit(f'Invalid signed response magic: {signed[:16]!r}')
+          Path('Escala Alarme.shortcut').write_bytes(signed)
+          print(f'Signed shortcut created: {len(signed)} bytes')
+          PY
+
+      - name: Validate signed Shortcut
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('Escala Alarme.shortcut')
+          data = p.read_bytes()
+          assert data[:4] == b'AEA1', data[:16]
+          print(f'OK: {p} starts with AEA1 and has {len(data)} bytes')
+          PY
+
       - name: Commit generated files to build branch
-        if: github.event_name == 'push'
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -63,7 +130,8 @@ jobs:
           name: escala-alarme-build
           if-no-files-found: error
           path: |
-            *.shortcut
-            *.plist
-            *_processed.cherri
+            Escala Alarme.shortcut
+            Escala Alarme_unsigned.shortcut
+            Escala Alarme.plist
+            Escala_Alarme_processed.cherri
             Escala_Alarme.cherri
