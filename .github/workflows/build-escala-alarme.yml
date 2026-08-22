@@ -7,6 +7,12 @@ on:
     paths:
       - 'Escala_Alarme.cherri'
       - '.github/workflows/build-escala-alarme.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'Escala_Alarme.cherri'
+      - '.github/workflows/build-escala-alarme.yml'
 
 jobs:
   build:
@@ -255,13 +261,12 @@ jobs:
               if modes_.count(0)!=1 or modes_.count(2)!=1 or modes_.count(1)>1:
                   raise SystemExit(f'Unbalanced conditional {g}: {modes_}')
 
-          # Independent schedule oracle.
           anchor = date(2026,8,17)
           def state(d):
               p=(d-anchor).days%21
               return p, p%7, p<7
           def alarm(d, kind='normal'):
-              p,dow,mine=state(d)
+              _,dow,mine=state(d)
               if kind in ('holiday','ashes'):
                   return '07:45' if mine else None
               if mine:
