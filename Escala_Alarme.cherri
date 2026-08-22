@@ -15,12 +15,6 @@ action 'gettimebetweendates' getTimeBetweenDates(
     timeBetweenUnit unit: 'WFTimeUntilUnit'
 ): number
 
-/*
-Busca uma janela curta. A validacao exata de data e feita logo depois,
-comparando yyyy-MM-dd do evento com yyyy-MM-dd de amanha.
-Assim, mesmo que o iOS renderize a janela como varios dias, somente
-um evento de AMANHA pode alterar o alarme.
-*/
 action 'filter.calendarevents' getNearCalendarEvents(): array {
     "WFContentItemFilter": {
         "Value": {
@@ -44,9 +38,8 @@ action 'filter.calendarevents' getNearCalendarEvents(): array {
     "WFContentItemSortProperty": "Start Date"
 }
 
-comment('ESCALA ALARME - versao enxuta v2. Ancora do ciclo: segunda-feira 17/08/2026. Ciclo: 7 dias de plantao + 14 dias sem plantao. Executar diariamente as 22:00 para preparar AMANHA.')
+comment('ESCALA ALARME - versao enxuta. Ancora: 17/08/2026. Ciclo de 21 dias. Executar diariamente as 22:00 para preparar AMANHA.')
 
-/* DATA E CICLO */
 const agora = currentDate()
 const amanha = adjustDate("{agora}", "Add", qty(1, "days"))
 const amanhaData = formatDate("{amanha}", "Custom", "yyyy-MM-dd")
@@ -65,15 +58,6 @@ if posCiclo < 7 {
     @plantao = true
 }
 
-/*
-MODO DO ALARME:
-0 = nenhum
-1 = 07:00
-2 = 07:45
-
-A ancora comeca numa segunda-feira, portanto:
-0 seg, 1 ter, 2 qua, 3 qui, 4 sex, 5 sab, 6 dom.
-*/
 @modo = 0
 if @plantao == true {
     if diaSemana < 5 {
@@ -88,7 +72,6 @@ if @plantao == true {
     }
 }
 
-/* CALENDARIO: UMA REGRA GENERICA DE FERIADO */
 @especial = false
 @motivo = "dia normal"
 @eventos = getNearCalendarEvents()
@@ -117,7 +100,6 @@ for evento in @eventos {
             @titulo = lowercase("{tituloRaw}")
             @ignorar = false
 
-            /* Segunda de Carnaval e dia normal para esta escala. */
             if diaSemana == 0 {
                 if @titulo contains "carnaval" {
                     @ignorar = true
@@ -132,7 +114,6 @@ for evento in @eventos {
     }
 }
 
-/* Feriado / Carnaval de terca / Cinzas: plantao 07:45; fora do plantao, folga. */
 if @especial == true {
     @modo = 0
     if @plantao == true {
@@ -140,11 +121,6 @@ if @especial == true {
     }
 }
 
-/*
-As cinco marcacoes PATCH abaixo sao substituidas no build por acoes
-reais colhidas de atalhos atuais do iOS. Isso evita os App Intents
-antigos do catalogo do Cherri que o iPhone mostrou como desconhecidos.
-*/
 comment('PATCH_DESLIGAR_0700')
 comment('PATCH_DESLIGAR_0745')
 
@@ -158,7 +134,6 @@ if @modo == 2 {
 
 comment('PATCH_ATIVAR_SLEEP')
 
-/* Confirmacao silenciosa do que ficou preparado para amanha. */
 @resumo = "SEM ALARME"
 if @modo == 1 {
     @resumo = "07:00"
