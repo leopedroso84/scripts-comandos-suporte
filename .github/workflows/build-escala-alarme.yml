@@ -21,61 +21,6 @@ jobs:
       - name: Checkout project
         uses: actions/checkout@v6
 
-      - name: Harvest current iOS donor actions
-        run: |
-          python3 - <<'PY'
-          import json, plistlib, urllib.request
-          from pathlib import Path
-
-          donors = {
-              'alarms': '430344710df4418fb9ab444e35a31aac',
-              'focus': '30e48072efab4f89a8c58b7042eedcc2',
-          }
-
-          def get(url):
-              req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-              with urllib.request.urlopen(req, timeout=30) as r:
-                  return r.read()
-
-          out = {}
-          for kind, sid in donors.items():
-              record = json.loads(get(f'https://www.icloud.com/shortcuts/api/records/{sid}'))
-              template = record['fields']['shortcut']['value']['downloadURL']
-              url = template.replace('${f}', 'shortcut.plist')
-              data = get(url)
-              Path(f'donor_{kind}.shortcut').write_bytes(data)
-              try:
-                  plist = plistlib.loads(data)
-              except Exception as exc:
-                  raise SystemExit(f'Could not parse {kind} donor plist: {exc}')
-
-              actions = plist.get('WFWorkflowActions', [])
-              selected = []
-              for i, a in enumerate(actions):
-                  ident = a.get('WFWorkflowActionIdentifier', '')
-                  params = a.get('WFWorkflowActionParameters', {})
-                  text = json.dumps({'id': ident, 'params': params}, default=str).lower()
-                  if kind == 'alarms':
-                      keep = ('alarm' in text or 'clock' in text or 'mobiletimer' in text)
-                  else:
-                      keep = ('dnd' in text or 'focus' in text or 'sleep' in text)
-                  if keep:
-                      selected.append({'index': i, 'identifier': ident, 'parameters': params})
-              out[kind] = {
-                  'shortcut_id': sid,
-                  'total_actions': len(actions),
-                  'selected_actions': selected,
-              }
-              print(f'{kind}: {len(actions)} total, {len(selected)} selected')
-              for x in selected:
-                  print('\n---', kind, 'index', x['index'], x['identifier'], '---')
-                  print(json.dumps(x['parameters'], ensure_ascii=False, indent=2, default=str))
-
-          Path('harvested_donor_actions.json').write_text(
-              json.dumps(out, ensure_ascii=False, indent=2, default=str), encoding='utf-8'
-          )
-          PY
-
       - name: Checkout Cherri v2.3.0
         uses: actions/checkout@v6
         with:
@@ -89,7 +34,7 @@ jobs:
           go-version: '1.24.x'
           cache-dependency-path: cherri/go.sum
 
-      - name: Add current HubSign headers to Cherri
+      - name: Add HubSign request headers
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -98,11 +43,11 @@ jobs:
           needle = 'request.Header.Set("User-Agent", fmt.Sprintf("cherri/%s", version))'
           replacement = needle + '\n\trequest.Header.Set("Origin", "https://routinehub.co")\n\trequest.Header.Set("Referer", "https://routinehub.co/")'
           if needle not in s:
-              raise SystemExit('HubSign request header location not found')
+              raise SystemExit('HubSign header insertion point not found')
           p.write_text(s.replace(needle, replacement, 1))
           PY
 
-      - name: Compile Shortcut
+      - name: Compile compact base Shortcut
         run: |
           set +e
           cd cherri
@@ -112,24 +57,194 @@ jobs:
           set -e
           echo "Cherri exit status: $STATUS"
           test -f "Escala Alarme.plist"
-          test -f "Escala Alarme_unsigned.shortcut"
 
-      - name: Sign with HubSign fallback
+      - name: Patch current iOS Clock and Sleep Focus actions
         run: |
-          if [ -f "Escala Alarme.shortcut" ]; then
-            python3 - <<'PY'
-          from pathlib import Path
-          p = Path('Escala Alarme.shortcut')
-          if p.read_bytes()[:4] != b'AEA1':
-              raise SystemExit('Existing signed file does not start with AEA1')
-          print('Signed file already created by Cherri')
-          PY
-            exit 0
-          fi
-
           python3 - <<'PY'
-          import json
+          import plistlib, uuid
+          from pathlib import Path
+
+          path = Path('Escala Alarme.plist')
+          shortcut = plistlib.loads(path.read_bytes())
+          actions = shortcut['WFWorkflowActions']
+
+          CLOCK_DESC_FIND = {
+              'TeamIdentifier': '0000000000',
+              'BundleIdentifier': 'com.apple.mobiletimer',
+              'Name': 'Clock',
+              'AppIntentIdentifier': 'AlarmEntity',
+              'ActionRequiresAppInstallation': True,
+          }
+          CLOCK_DESC_TOGGLE = {
+              'TeamIdentifier': '0000000000',
+              'BundleIdentifier': 'com.apple.mobiletimer',
+              'Name': 'Clock',
+              'AppIntentIdentifier': 'ToggleAlarmIntent',
+          }
+
+          def U():
+              return str(uuid.uuid4()).upper()
+
+          def alarm_block(label, state, tag):
+              find_id = U()
+              group_id = U()
+              output_name = f'{tag} Find Alarm'
+              find_action = {
+                  'WFWorkflowActionIdentifier': 'com.apple.mobiletimer-framework.MobileTimerIntents.MTGetAlarmsIntent',
+                  'WFWorkflowActionParameters': {
+                      'UUID': find_id,
+                      'CustomOutputName': output_name,
+                      'WFContentItemFilter': {
+                          'Value': {
+                              'WFActionParameterFilterTemplates': [{
+                                  'Operator': 4,
+                                  'Values': {'Unit': 4, 'String': label},
+                                  'Removable': True,
+                                  'Property': 'label',
+                              }],
+                              'WFActionParameterFilterPrefix': 1,
+                              'WFContentPredicateBoundedDate': False,
+                          },
+                          'WFSerializationType': 'WFContentPredicateTableTemplate',
+                      },
+                      'AppIntentDescriptor': CLOCK_DESC_FIND.copy(),
+                  },
+              }
+              repeat_start = {
+                  'WFWorkflowActionIdentifier': 'is.workflow.actions.repeat.each',
+                  'WFWorkflowActionParameters': {
+                      'GroupingIdentifier': group_id,
+                      'WFControlFlowMode': 0,
+                      'WFInput': {
+                          'Value': {
+                              'Type': 'ActionOutput',
+                              'OutputUUID': find_id,
+                              'OutputName': output_name,
+                          },
+                          'WFSerializationType': 'WFTextTokenAttachment',
+                      },
+                  },
+              }
+              toggle = {
+                  'WFWorkflowActionIdentifier': 'com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent',
+                  'WFWorkflowActionParameters': {
+                      'UUID': U(),
+                      'alarm': {
+                          'Value': {'VariableName': 'Repeat Item', 'Type': 'Variable'},
+                          'WFSerializationType': 'WFTextTokenAttachment',
+                      },
+                      'AppIntentDescriptor': CLOCK_DESC_TOGGLE.copy(),
+                      'ShowWhenRun': False,
+                      'state': state,
+                  },
+              }
+              repeat_end = {
+                  'WFWorkflowActionIdentifier': 'is.workflow.actions.repeat.each',
+                  'WFWorkflowActionParameters': {
+                      'GroupingIdentifier': group_id,
+                      'WFControlFlowMode': 2,
+                      'UUID': U(),
+                  },
+              }
+              return [find_action, repeat_start, toggle, repeat_end]
+
+          replacements = {
+              'PATCH_DESLIGAR_0700': alarm_block('Escala 07:00', 0, '0700 OFF'),
+              'PATCH_DESLIGAR_0745': alarm_block('Escala 07:45', 0, '0745 OFF'),
+              'PATCH_LIGAR_0700': alarm_block('Escala 07:00', 1, '0700 ON'),
+              'PATCH_LIGAR_0745': alarm_block('Escala 07:45', 1, '0745 ON'),
+              'PATCH_ATIVAR_SLEEP': [{
+                  'WFWorkflowActionIdentifier': 'is.workflow.actions.dnd.set',
+                  'WFWorkflowActionParameters': {
+                      'Enabled': 1,
+                      'FocusModes': {
+                          'Identifier': 'com.apple.sleep.sleep-mode',
+                          'DisplayString': 'Sleep',
+                      },
+                  },
+              }],
+          }
+
+          patched = []
+          seen = set()
+          for action in actions:
+              if action.get('WFWorkflowActionIdentifier') == 'is.workflow.actions.comment':
+                  marker = action.get('WFWorkflowActionParameters', {}).get('WFCommentActionText')
+                  if marker in replacements:
+                      patched.extend(replacements[marker])
+                      seen.add(marker)
+                      continue
+              patched.append(action)
+
+          missing = set(replacements) - seen
+          if missing:
+              raise SystemExit(f'Missing patch markers: {sorted(missing)}')
+
+          shortcut['WFWorkflowActions'] = patched
+          path.write_bytes(plistlib.dumps(shortcut, fmt=plistlib.FMT_XML, sort_keys=False))
+          Path('Escala Alarme_unsigned.shortcut').write_bytes(plistlib.dumps(shortcut, fmt=plistlib.FMT_BINARY, sort_keys=False))
+          Path('Escala Alarme.shortcut').unlink(missing_ok=True)
+          print(f'Patched workflow actions: {len(actions)} -> {len(patched)}')
+          PY
+
+      - name: Structural validation
+        run: |
+          python3 - <<'PY'
           import plistlib
+          from pathlib import Path
+
+          sc = plistlib.loads(Path('Escala Alarme.plist').read_bytes())
+          actions = sc['WFWorkflowActions']
+          print('Action count:', len(actions))
+          if len(actions) > 100:
+              raise SystemExit('Shortcut unexpectedly large')
+
+          comments = [a.get('WFWorkflowActionParameters', {}).get('WFCommentActionText', '') for a in actions]
+          if any(x.startswith('PATCH_') for x in comments):
+              raise SystemExit('Patch marker left in Shortcut')
+
+          finds = [a for a in actions if a.get('WFWorkflowActionIdentifier','').endswith('MTGetAlarmsIntent')]
+          toggles = [a for a in actions if a.get('WFWorkflowActionIdentifier','').endswith('MTToggleAlarmIntent')]
+          focuses = [a for a in actions if a.get('WFWorkflowActionIdentifier') == 'is.workflow.actions.dnd.set']
+          print('Find Alarms:', len(finds), 'Toggle Alarms:', len(toggles), 'Sleep Focus:', len(focuses))
+          if len(finds) != 4 or len(toggles) != 4 or len(focuses) != 1:
+              raise SystemExit('Unexpected Clock/Focus action count')
+
+          labels = []
+          for a in finds:
+              p = a['WFWorkflowActionParameters']
+              d = p['AppIntentDescriptor']
+              assert d['BundleIdentifier'] == 'com.apple.mobiletimer'
+              row = p['WFContentItemFilter']['Value']['WFActionParameterFilterTemplates'][0]
+              labels.append(row['Values']['String'])
+          if set(labels) != {'Escala 07:00', 'Escala 07:45'}:
+              raise SystemExit(f'Unexpected alarm labels: {labels}')
+
+          states = []
+          for a in toggles:
+              p = a['WFWorkflowActionParameters']
+              assert p['AppIntentDescriptor']['BundleIdentifier'] == 'com.apple.mobiletimer'
+              states.append(p['state'])
+          if states.count(0) != 2 or states.count(1) != 2:
+              raise SystemExit(f'Unexpected toggle states: {states}')
+
+          fp = focuses[0]['WFWorkflowActionParameters']
+          assert fp.get('Enabled') == 1
+          assert fp['FocusModes']['Identifier'] == 'com.apple.sleep.sleep-mode'
+
+          serialized = repr(sc).lower()
+          if 'com.apple.clock' in serialized:
+              raise SystemExit('Legacy com.apple.clock descriptor remains')
+          for forbidden in ['corpus christi', 'independência do brasil', 'tiradentes', 'consciência negra']:
+              if forbidden in serialized:
+                  raise SystemExit(f'Hard-coded holiday leaked into compact version: {forbidden}')
+          print('Structural validation OK')
+          PY
+
+      - name: Sign patched Shortcut with HubSign
+        run: |
+          python3 - <<'PY'
+          import json, plistlib
           from pathlib import Path
           from urllib.request import Request, urlopen
 
@@ -152,23 +267,13 @@ jobs:
           if signed[:4] != b'AEA1':
               raise SystemExit(f'Invalid signed response magic: {signed[:16]!r}')
           Path('Escala Alarme.shortcut').write_bytes(signed)
-          print(f'Signed shortcut created: {len(signed)} bytes')
+          print(f'Signed Shortcut: {len(signed)} bytes, AEA1 OK')
           PY
 
-      - name: Validate signed Shortcut
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('Escala Alarme.shortcut')
-          data = p.read_bytes()
-          assert data[:4] == b'AEA1', data[:16]
-          print(f'OK: {p} starts with AEA1 and has {len(data)} bytes')
-          PY
-
-      - name: Upload generated Shortcut
+      - name: Upload build
         uses: actions/upload-artifact@v4
         with:
-          name: escala-alarme-build
+          name: escala-alarme-compact
           if-no-files-found: error
           path: |
             Escala Alarme.shortcut
@@ -176,6 +281,3 @@ jobs:
             Escala Alarme.plist
             Escala_Alarme_processed.cherri
             Escala_Alarme.cherri
-            harvested_donor_actions.json
-            donor_alarms.shortcut
-            donor_focus.shortcut
