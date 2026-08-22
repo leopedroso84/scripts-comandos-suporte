@@ -38,8 +38,6 @@ action 'filter.calendarevents' getNearCalendarEvents(): array {
     "WFContentItemSortProperty": "Start Date"
 }
 
-comment('ESCALA ALARME - versao enxuta. Ancora: 17/08/2026. Ciclo de 21 dias. Executar diariamente as 22:00 para preparar AMANHA.')
-
 const agora = currentDate()
 const amanha = adjustDate("{agora}", "Add", qty(1, "days"))
 const amanhaData = formatDate("{amanha}", "Custom", "yyyy-MM-dd")
@@ -72,8 +70,6 @@ if @plantao == true {
     }
 }
 
-@especial = false
-@motivo = "dia normal"
 @eventos = getNearCalendarEvents()
 
 for evento in @eventos {
@@ -83,19 +79,8 @@ for evento in @eventos {
     if dataEvento == amanhaData {
         const calendarioRaw = getEventDetail(@evento, "Calendar")
         @calendario = lowercase("{calendarioRaw}")
-        @calendarioFeriado = false
 
         if @calendario contains "feriado" {
-            @calendarioFeriado = true
-        }
-        if @calendario contains "holiday" {
-            @calendarioFeriado = true
-        }
-        if @calendario contains "jales" {
-            @calendarioFeriado = true
-        }
-
-        if @calendarioFeriado == true {
             const tituloRaw = getEventDetail(@evento, "Title")
             @titulo = lowercase("{tituloRaw}")
             @ignorar = false
@@ -107,17 +92,12 @@ for evento in @eventos {
             }
 
             if @ignorar == false {
-                @especial = true
-                @motivo = "{tituloRaw}"
+                @modo = 0
+                if @plantao == true {
+                    @modo = 2
+                }
             }
         }
-    }
-}
-
-if @especial == true {
-    @modo = 0
-    if @plantao == true {
-        @modo = 2
     }
 }
 
@@ -133,12 +113,3 @@ if @modo == 2 {
 }
 
 comment('PATCH_ATIVAR_SLEEP')
-
-@resumo = "SEM ALARME"
-if @modo == 1 {
-    @resumo = "07:00"
-}
-if @modo == 2 {
-    @resumo = "07:45"
-}
-showNotification("Amanha: {@resumo} • {@motivo}", "Escala Alarme", false)
