@@ -21,6 +21,74 @@ jobs:
       - name: Checkout project
         uses: actions/checkout@v6
 
+      - name: Fetch iCloud donor Shortcut
+        run: |
+          python3 - <<'PY'
+          import json, plistlib
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+
+          shortcut_id = 'be9afb3352b34715a160b13acf814c96'
+          api = f'https://www.icloud.com/shortcuts/api/records/{shortcut_id}'
+          req = Request(api, headers={'User-Agent': 'Mozilla/5.0'})
+          with urlopen(req, timeout=45) as r:
+              record = json.loads(r.read())
+          Path('donor_record.json').write_text(json.dumps(record, indent=2, ensure_ascii=False))
+
+          urls = []
+          def walk(value, path='root'):
+              if isinstance(value, dict):
+                  for k, v in value.items():
+                      p = f'{path}.{k}'
+                      if k == 'downloadURL' and isinstance(v, str):
+                          urls.append((p, v))
+                      walk(v, p)
+              elif isinstance(value, list):
+                  for i, v in enumerate(value):
+                      walk(v, f'{path}[{i}]')
+          walk(record)
+          print('Download URLs found:', len(urls))
+          if not urls:
+              raise SystemExit('No downloadURL found in iCloud record')
+
+          parsed = None
+          summary = []
+          for i, (source_path, url) in enumerate(urls):
+              req = Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+              with urlopen(req, timeout=45) as r:
+                  data = r.read()
+              out = Path(f'donor_candidate_{i}.bin')
+              out.write_bytes(data)
+              magic = data[:8]
+              print(i, source_path, len(data), magic)
+              summary.append(f'candidate {i}: {source_path} size={len(data)} magic={magic!r}')
+              try:
+                  obj = plistlib.loads(data)
+              except Exception as e:
+                  summary.append(f'candidate {i}: plist parse failed: {e}')
+                  continue
+              if isinstance(obj, dict) and 'WFWorkflowActions' in obj:
+                  parsed = obj
+                  Path('donor_unsigned.shortcut').write_bytes(data)
+                  Path('donor.plist').write_bytes(plistlib.dumps(obj, fmt=plistlib.FMT_XML, sort_keys=False))
+                  summary.append(f'candidate {i}: parsed workflow with {len(obj["WFWorkflowActions"])} actions')
+                  break
+
+          if parsed is None:
+              Path('donor_summary.txt').write_text('\n'.join(summary))
+              raise SystemExit('Could not parse any donor candidate as an unsigned Shortcut plist')
+
+          lines = []
+          for idx, action in enumerate(parsed['WFWorkflowActions']):
+              ident = action.get('WFWorkflowActionIdentifier', '')
+              params = action.get('WFWorkflowActionParameters', {})
+              lines.append(f'[{idx}] {ident}')
+              lines.append(json.dumps(params, ensure_ascii=False, indent=2, default=str))
+          Path('donor_actions.txt').write_text('\n'.join(lines))
+          Path('donor_summary.txt').write_text('\n'.join(summary))
+          print('Donor extraction OK')
+          PY
+
       - name: Checkout Cherri v2.3.0
         uses: actions/checkout@v6
         with:
@@ -286,3 +354,9 @@ jobs:
             Escala Alarme.plist
             Escala_Alarme_processed.cherri
             Escala_Alarme.cherri
+            donor_record.json
+            donor_candidate_*.bin
+            donor_unsigned.shortcut
+            donor.plist
+            donor_actions.txt
+            donor_summary.txt
