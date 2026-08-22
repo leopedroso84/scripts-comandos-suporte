@@ -4,9 +4,10 @@
 #include 'actions/calendar'
 #include 'actions/math'
 #include 'actions/text'
+#include 'actions/basic'
 
 enum timeBetweenUnit {
-    'Seconds'
+    'Days'
 }
 
 action 'gettimebetweendates' getTimeBetweenDates(
@@ -15,101 +16,195 @@ action 'gettimebetweendates' getTimeBetweenDates(
     timeBetweenUnit unit: 'WFTimeUntilUnit'
 ): number
 
-action 'filter.calendarevents' getNearCalendarEvents(): array {
-    "WFContentItemFilter": {
-        "Value": {
-            "WFActionParameterFilterPrefix": 1,
-            "WFActionParameterFilterTemplates": [
-                {
-                    "Operator": 1000,
-                    "Property": "Start Date",
-                    "Removable": true,
-                    "Values": {
-                        "Number": 1,
-                        "Unit": 16384
-                    }
-                }
-            ],
-            "WFContentPredicateBoundedDate": false
-        },
-        "WFSerializationType": "WFContentPredicateTableTemplate"
-    },
-    "WFContentItemSortOrder": "Oldest First",
-    "WFContentItemSortProperty": "Start Date"
-}
+action 'filter.calendarevents' getDayEvents(): array
 
 const agora = currentDate()
-const amanha = adjustDate("{agora}", "Add", qty(1, "days"))
-const amanhaData = formatDate("{amanha}", "Custom", "yyyy-MM-dd")
+const hojeInicio = adjustDate("{agora}", "Get Start of Day")
+const amanhaInicio = adjustDate("{hojeInicio}", "Add", qty(1, "days"))
+const depoisAmanhaInicio = adjustDate("{hojeInicio}", "Add", qty(2, "days"))
+const hojeFim = adjustDate("{amanhaInicio}", "Subtract", qty(1, "sec"))
+const amanhaFim = adjustDate("{depoisAmanhaInicio}", "Subtract", qty(1, "sec"))
+
 const dataBase = date("2026-08-17")
 const epoch = date("1970-01-01")
-const amanhaSeg = getTimeBetweenDates("{amanha}", "{epoch}", "Seconds")
-const baseSeg = getTimeBetweenDates("{dataBase}", "{epoch}", "Seconds")
-const diferencaSeg = amanhaSeg - baseSeg
-const diferencaDias = diferencaSeg / 86400
-const diasDesdeBase = floor(diferencaDias)
-const posCiclo = diasDesdeBase % 21
-const diaSemana = posCiclo % 7
+const hojeDiasEpoch = getTimeBetweenDates("{hojeInicio}", "{epoch}", "Days")
+const baseDiasEpoch = getTimeBetweenDates("{dataBase}", "{epoch}", "Days")
+const diasDesdeBase = hojeDiasEpoch - baseDiasEpoch
+const posHoje = diasDesdeBase % 21
+const diaHoje = posHoje % 7
+const posAmanhaSoma = posHoje + 1
+const posAmanha = posAmanhaSoma % 21
+const diaAmanhaSoma = diaHoje + 1
+const diaAmanha = diaAmanhaSoma % 7
 
-@plantao = false
-if posCiclo < 7 {
-    @plantao = true
+@minhaSemanaHoje = false
+if posHoje < 7 {
+    @minhaSemanaHoje = true
 }
 
-@modo = 0
-if @plantao == true {
-    if diaSemana < 5 {
-        @modo = 1
-    }
-    if diaSemana == 6 {
-        @modo = 2
-    }
-} else {
-    if diaSemana < 6 {
-        @modo = 1
-    }
+@minhaSemanaAmanha = false
+if posAmanha < 7 {
+    @minhaSemanaAmanha = true
 }
 
-@eventos = getNearCalendarEvents()
+const horaTexto = formatDate("{agora}", "Custom", "HH")
+const hora = number("{horaTexto}")
 
-for evento in @eventos {
-    const inicioEvento = getEventDetail(@evento, "Start Date")
-    const dataEvento = formatDate("{inicioEvento}", "Custom", "yyyy-MM-dd")
-
-    if dataEvento == amanhaData {
-        const calendarioRaw = getEventDetail(@evento, "Calendar")
-        @calendario = lowercase("{calendarioRaw}")
-
-        if @calendario contains "feriado" {
-            const tituloRaw = getEventDetail(@evento, "Title")
-            @titulo = lowercase("{tituloRaw}")
-            @ignorar = false
-
-            if diaSemana == 0 {
-                if @titulo contains "carnaval" {
-                    @ignorar = true
+@tipoHoje = 0
+@eventosHoje = getDayEvents()
+for eventoHoje in @eventosHoje {
+    const calendarioHojeRaw = getEventDetail(@eventoHoje, "Calendar")
+    @calendarioHoje = lowercase("{calendarioHojeRaw}")
+    if @calendarioHoje contains "feriado" {
+        const tituloHojeRaw = getEventDetail(@eventoHoje, "Title")
+        @tituloHoje = lowercase("{tituloHojeRaw}")
+        if @tituloHoje contains "cinzas" {
+            @tipoHoje = 2
+        } else {
+            @ignorarCarnavalHoje = false
+            if diaHoje == 0 {
+                if @tituloHoje contains "carnaval" {
+                    @ignorarCarnavalHoje = true
                 }
             }
-
-            if @ignorar == false {
-                @modo = 0
-                if @plantao == true {
-                    @modo = 2
+            if @ignorarCarnavalHoje == false {
+                if @tipoHoje != 2 {
+                    @tipoHoje = 1
                 }
             }
         }
     }
 }
 
-comment('PATCH_DESLIGAR_0700')
-comment('PATCH_DESLIGAR_0745')
-
-if @modo == 1 {
-    comment('PATCH_LIGAR_0700')
+@tipoAmanha = 0
+@eventosAmanha = getDayEvents()
+for eventoAmanha in @eventosAmanha {
+    const calendarioAmanhaRaw = getEventDetail(@eventoAmanha, "Calendar")
+    @calendarioAmanha = lowercase("{calendarioAmanhaRaw}")
+    if @calendarioAmanha contains "feriado" {
+        const tituloAmanhaRaw = getEventDetail(@eventoAmanha, "Title")
+        @tituloAmanha = lowercase("{tituloAmanhaRaw}")
+        if @tituloAmanha contains "cinzas" {
+            @tipoAmanha = 2
+        } else {
+            @ignorarCarnavalAmanha = false
+            if diaAmanha == 0 {
+                if @tituloAmanha contains "carnaval" {
+                    @ignorarCarnavalAmanha = true
+                }
+            }
+            if @ignorarCarnavalAmanha == false {
+                if @tipoAmanha != 2 {
+                    @tipoAmanha = 1
+                }
+            }
+        }
+    }
 }
 
-if @modo == 2 {
-    comment('PATCH_LIGAR_0745')
+@inicioTrabalho = -1
+@fimTrabalho = -1
+
+if @tipoHoje == 1 {
+    if @minhaSemanaHoje == true {
+        @inicioTrabalho = 8
+        @fimTrabalho = 20
+    }
+} else {
+    if @tipoHoje == 2 {
+        if @minhaSemanaHoje == true {
+            @inicioTrabalho = 8
+            @fimTrabalho = 18
+        } else {
+            @inicioTrabalho = 12
+            @fimTrabalho = 18
+        }
+    } else {
+        if @minhaSemanaHoje == true {
+            if diaHoje < 5 {
+                @inicioTrabalho = 8
+                @fimTrabalho = 18
+            } else {
+                if diaHoje == 5 {
+                    @inicioTrabalho = 12
+                    @fimTrabalho = 20
+                } else {
+                    @inicioTrabalho = 8
+                    @fimTrabalho = 20
+                }
+            }
+        } else {
+            if diaHoje < 5 {
+                @inicioTrabalho = 8
+                @fimTrabalho = 18
+            } else {
+                if diaHoje == 5 {
+                    @inicioTrabalho = 8
+                    @fimTrabalho = 12
+                }
+            }
+        }
+    }
 }
 
-comment('PATCH_ATIVAR_SLEEP')
+@trabalhandoAgora = false
+if @inicioTrabalho >= 0 {
+    if hora >= @inicioTrabalho {
+        if hora < @fimTrabalho {
+            @trabalhandoAgora = true
+        }
+    }
+}
+
+@periodoSono = false
+if hora >= 22 {
+    @periodoSono = true
+}
+if hora < 8 {
+    @periodoSono = true
+}
+
+if @periodoSono == true {
+    comment('PATCH_FOLGA_OFF')
+    comment('PATCH_SLEEP_ON')
+} else {
+    comment('PATCH_SLEEP_OFF')
+    if @trabalhandoAgora == true {
+        comment('PATCH_FOLGA_OFF')
+    } else {
+        comment('PATCH_FOLGA_ON')
+    }
+}
+
+if hora >= 22 {
+    @alarmeAmanha = 0
+
+    if @tipoAmanha != 0 {
+        if @minhaSemanaAmanha == true {
+            @alarmeAmanha = 2
+        }
+    } else {
+        if @minhaSemanaAmanha == true {
+            if diaAmanha < 5 {
+                @alarmeAmanha = 1
+            }
+            if diaAmanha == 6 {
+                @alarmeAmanha = 2
+            }
+        } else {
+            if diaAmanha < 6 {
+                @alarmeAmanha = 1
+            }
+        }
+    }
+
+    comment('PATCH_ALARM_OFF_0700')
+    comment('PATCH_ALARM_OFF_0745')
+
+    if @alarmeAmanha == 1 {
+        comment('PATCH_ALARM_ON_0700')
+    }
+    if @alarmeAmanha == 2 {
+        comment('PATCH_ALARM_ON_0745')
+    }
+}
