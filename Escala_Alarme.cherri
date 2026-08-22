@@ -54,29 +54,27 @@ const diasDesdeBase = floor(diferencaDias)
 const posCiclo = diasDesdeBase % 21
 const diaCiclo = posCiclo % 7
 
-@posCiclo = number(posCiclo)
-@diaCiclo = number(diaCiclo)
 @semanaPlantao = false
-if @posCiclo < 7 {
+if posCiclo < 7 {
     @semanaPlantao = true
 }
 
 @alarmMode = 0
 if @semanaPlantao == true {
-    if @diaCiclo < 5 {
+    if diaCiclo < 5 {
         @alarmMode = 1
     }
-    if @diaCiclo == 5 {
+    if diaCiclo == 5 {
         @alarmMode = 0
     }
-    if @diaCiclo == 6 {
+    if diaCiclo == 6 {
         @alarmMode = 2
     }
 } else {
-    if @diaCiclo < 6 {
+    if diaCiclo < 6 {
         @alarmMode = 1
     }
-    if @diaCiclo == 6 {
+    if diaCiclo == 6 {
         @alarmMode = 0
     }
 }
@@ -90,8 +88,7 @@ for evento in @eventos {
     @titulo = lowercase("{tituloRaw}")
 
     const calendarioRaw = getEventDetail(@evento, "Calendar")
-    const calendarioNomeRaw = getName(calendarioRaw)
-    @calendarioNome = lowercase("{calendarioNomeRaw}")
+    @calendarioNome = lowercase("{calendarioRaw}")
 
     @calendarioFeriados = false
     if @calendarioNome contains "feriado" {
@@ -107,32 +104,87 @@ for evento in @eventos {
     if @calendarioFeriados == true {
         @feriadoComum = false
 
-        if @titulo contains "ano novo" { @feriadoComum = true }
-        if @titulo contains "confraterniza" { @feriadoComum = true }
-        if @titulo contains "paixão" { @feriadoComum = true }
-        if @titulo contains "paixao" { @feriadoComum = true }
-        if @titulo contains "sexta-feira santa" { @feriadoComum = true }
-        if @titulo contains "tiradentes" { @feriadoComum = true }
-        if @titulo contains "dia do trabalho" { @feriadoComum = true }
-        if @titulo contains "corpus christi" { @feriadoComum = true }
-        if @titulo contains "independência do brasil" { @feriadoComum = true }
-        if @titulo contains "independencia do brasil" { @feriadoComum = true }
-        if @titulo contains "nossa senhora aparecida" { @feriadoComum = true }
-        if @titulo contains "finados" { @feriadoComum = true }
-        if @titulo contains "proclamação da república" { @feriadoComum = true }
-        if @titulo contains "proclamacao da republica" { @feriadoComum = true }
-        if @titulo contains "consciência negra" { @feriadoComum = true }
-        if @titulo contains "consciencia negra" { @feriadoComum = true }
-        if @titulo == "natal" { @feriadoComum = true }
-        if @titulo contains "revolução constitucionalista" { @feriadoComum = true }
-        if @titulo contains "revolucao constitucionalista" { @feriadoComum = true }
-        if @titulo contains "9 de julho" { @feriadoComum = true }
-        if @titulo contains "aniversário de jales" { @feriadoComum = true }
-        if @titulo contains "aniversario de jales" { @feriadoComum = true }
-        if @titulo contains "fundação de jales" { @feriadoComum = true }
-        if @titulo contains "fundacao de jales" { @feriadoComum = true }
-        if @titulo contains "assunção de nossa senhora" { @feriadoComum = true }
-        if @titulo contains "assuncao de nossa senhora" { @feriadoComum = true }
+        if @titulo contains "ano novo" {
+            @feriadoComum = true
+        }
+        if @titulo contains "confraterniza" {
+            @feriadoComum = true
+        }
+        if @titulo contains "paixão" {
+            @feriadoComum = true
+        }
+        if @titulo contains "paixao" {
+            @feriadoComum = true
+        }
+        if @titulo contains "sexta-feira santa" {
+            @feriadoComum = true
+        }
+        if @titulo contains "tiradentes" {
+            @feriadoComum = true
+        }
+        if @titulo contains "dia do trabalho" {
+            @feriadoComum = true
+        }
+        if @titulo contains "corpus christi" {
+            @feriadoComum = true
+        }
+        if @titulo contains "independência do brasil" {
+            @feriadoComum = true
+        }
+        if @titulo contains "independencia do brasil" {
+            @feriadoComum = true
+        }
+        if @titulo contains "nossa senhora aparecida" {
+            @feriadoComum = true
+        }
+        if @titulo contains "finados" {
+            @feriadoComum = true
+        }
+        if @titulo contains "proclamação da república" {
+            @feriadoComum = true
+        }
+        if @titulo contains "proclamacao da republica" {
+            @feriadoComum = true
+        }
+        if @titulo contains "consciência negra" {
+            @feriadoComum = true
+        }
+        if @titulo contains "consciencia negra" {
+            @feriadoComum = true
+        }
+        if @titulo == "natal" {
+            @feriadoComum = true
+        }
+        if @titulo == "dia de natal" {
+            @feriadoComum = true
+        }
+        if @titulo contains "revolução constitucionalista" {
+            @feriadoComum = true
+        }
+        if @titulo contains "revolucao constitucionalista" {
+            @feriadoComum = true
+        }
+        if @titulo contains "9 de julho" {
+            @feriadoComum = true
+        }
+        if @titulo contains "aniversário de jales" {
+            @feriadoComum = true
+        }
+        if @titulo contains "aniversario de jales" {
+            @feriadoComum = true
+        }
+        if @titulo contains "fundação de jales" {
+            @feriadoComum = true
+        }
+        if @titulo contains "fundacao de jales" {
+            @feriadoComum = true
+        }
+        if @titulo contains "assunção de nossa senhora" {
+            @feriadoComum = true
+        }
+        if @titulo contains "assuncao de nossa senhora" {
+            @feriadoComum = true
+        }
 
         if @feriadoComum == true {
             @eventoEspecial = true
@@ -140,14 +192,14 @@ for evento in @eventos {
         }
 
         if @titulo contains "carnaval" {
-            if @diaCiclo == 1 {
+            if diaCiclo == 1 {
                 @eventoEspecial = true
                 @nomeEspecial = "{tituloRaw}"
             }
         }
 
         if @titulo contains "cinzas" {
-            if @diaCiclo == 2 {
+            if diaCiclo == 2 {
                 @eventoEspecial = true
                 @nomeEspecial = "{tituloRaw}"
             }
@@ -163,55 +215,62 @@ if @eventoEspecial == true {
     }
 }
 
-@alarm0700: variable
-@alarm0745: variable
+@found0700 = false
+@found0745 = false
 @alarmes = getAlarms()
 
 for alarme in @alarmes {
-    const nomeAlarmeRaw = getName(@alarme)
-    @nomeAlarme = "{nomeAlarmeRaw}"
+    @nomeAlarme = "{@alarme['Label']}"
 
     if @nomeAlarme == "Escala 07:00" {
-        @alarm0700 = @alarme
+        @found0700 = true
+        turnOffAlarm(@alarme, false)
+        if @alarmMode == 1 {
+            turnOnAlarm(@alarme, false)
+        }
     }
-    if @nomeAlarme == "Escala 07:45" {
-        @alarm0745 = @alarme
-    }
-}
 
-if @alarm0700 {
-    turnOffAlarm(@alarm0700, false)
-}
-if @alarm0745 {
-    turnOffAlarm(@alarm0745, false)
+    if @nomeAlarme == "Escala 07:45" {
+        @found0745 = true
+        turnOffAlarm(@alarme, false)
+        if @alarmMode == 2 {
+            turnOnAlarm(@alarme, false)
+        }
+    }
 }
 
 if @alarmMode == 1 {
-    if @alarm0700 {
-        turnOnAlarm(@alarm0700, false)
-    } else {
+    if @found0700 == false {
         showNotification("ERRO: alarme 'Escala 07:00' nao foi encontrado.", "Escala Alarme", true)
     }
 }
 
 if @alarmMode == 2 {
-    if @alarm0745 {
-        turnOnAlarm(@alarm0745, false)
-    } else {
+    if @found0745 == false {
         showNotification("ERRO: alarme 'Escala 07:45' nao foi encontrado.", "Escala Alarme", true)
     }
 }
 
 @fimDormir = "09:00"
-if @alarmMode == 1 { @fimDormir = "07:00" }
-if @alarmMode == 2 { @fimDormir = "07:45" }
+if @alarmMode == 1 {
+    @fimDormir = "07:00"
+}
+if @alarmMode == 2 {
+    @fimDormir = "07:45"
+}
 setFocusMode("Sleep", "Time", "{@fimDormir}")
 
 @resumo = "SEM ALARME"
-if @alarmMode == 1 { @resumo = "07:00" }
-if @alarmMode == 2 { @resumo = "07:45" }
+if @alarmMode == 1 {
+    @resumo = "07:00"
+}
+if @alarmMode == 2 {
+    @resumo = "07:45"
+}
 
 @motivo = "dia normal"
-if @eventoEspecial == true { @motivo = "{@nomeEspecial}" }
+if @eventoEspecial == true {
+    @motivo = "{@nomeEspecial}"
+}
 
 showNotification("Amanha: {@resumo} • {@motivo}", "Escala Alarme", false)
