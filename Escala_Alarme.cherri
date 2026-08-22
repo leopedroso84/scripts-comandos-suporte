@@ -47,7 +47,7 @@ if posAmanha < 7 {
 }
 
 const horaTexto = formatDate("{agora}", "Custom", "HH")
-const hora = number("{horaTexto}")
+const hora = number(horaTexto)
 
 @tipoHoje = 0
 @eventosHoje = getDayEvents()
