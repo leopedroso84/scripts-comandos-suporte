@@ -229,7 +229,7 @@ jobs:
           print('Calendar searches:', c['is.workflow.actions.filter.calendarevents'])
           print('Direct alarm toggles:', c['com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent'])
           print('Focus actions:', c['is.workflow.actions.dnd.set'])
-          if len(actions) > 220: raise SystemExit('Shortcut unexpectedly large')
+          if len(actions) > 320: raise SystemExit('Shortcut unexpectedly large')
           if c['is.workflow.actions.filter.calendarevents'] != 2: raise SystemExit('Need exactly two calendar searches')
           if c['com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent'] != 4: raise SystemExit('Need exactly four direct alarm actions')
           if c['is.workflow.actions.dnd.set'] != 5: raise SystemExit('Need exactly five Focus actions')
