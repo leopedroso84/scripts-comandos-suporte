@@ -77,7 +77,7 @@ jobs:
       - name: Compile deterministic base
         run: |
           cd cherri
-          go run . ../Escala_Alarme.cherri --debug
+          go run . ../Escala_Alarme.cherri --debug --skip-sign
           cd ..
           test -f "Escala Alarme.plist"
 
