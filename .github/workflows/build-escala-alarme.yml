@@ -1,16 +1,12 @@
 name: Build Escala Alarme
 
 on:
-  push:
+  pull_request:
     branches:
-      - chatgpt/escala-alarme-build-20260822
+      - main
     paths:
       - 'Escala_Alarme.cherri'
       - '.github/workflows/build-escala-alarme.yml'
-  workflow_dispatch:
-
-permissions:
-  contents: write
 
 jobs:
   build:
@@ -56,8 +52,6 @@ jobs:
           echo "Cherri exit status: $STATUS"
           test -f "Escala Alarme.plist"
           test -f "Escala Alarme_unsigned.shortcut"
-          echo '--- generated files ---'
-          find . -maxdepth 1 -type f \( -name '*.shortcut' -o -name '*.plist' -o -name '*processed*.cherri' \) -print
 
       - name: Sign with HubSign fallback
         run: |
@@ -78,13 +72,9 @@ jobs:
           from pathlib import Path
           from urllib.request import Request, urlopen
 
-          src = Path('Escala Alarme.plist')
-          shortcut = plistlib.loads(src.read_bytes())
+          shortcut = plistlib.loads(Path('Escala Alarme.plist').read_bytes())
           xml = plistlib.dumps(shortcut, fmt=plistlib.FMT_XML).decode('utf-8')
-          payload = json.dumps({
-              'shortcutName': 'Escala Alarme',
-              'shortcut': xml,
-          }).encode('utf-8')
+          payload = json.dumps({'shortcutName': 'Escala Alarme', 'shortcut': xml}).encode('utf-8')
           req = Request(
               'https://hubsign.routinehub.services/sign',
               data=payload,
@@ -113,16 +103,6 @@ jobs:
           assert data[:4] == b'AEA1', data[:16]
           print(f'OK: {p} starts with AEA1 and has {len(data)} bytes')
           PY
-
-      - name: Commit generated files to build branch
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -- '*.shortcut' '*.plist' '*_processed.cherri' || true
-          if ! git diff --cached --quiet; then
-            git commit -m 'Build Escala Alarme shortcut'
-            git push
-          fi
 
       - name: Upload generated Shortcut
         uses: actions/upload-artifact@v4
