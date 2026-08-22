@@ -6,6 +6,11 @@ on:
       - chatgpt/escala-alarme-build-20260822
     paths:
       - '.github/workflows/repair-escala-metadata.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/repair-escala-metadata.yml'
 
 jobs:
   repair:
