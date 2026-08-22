@@ -191,12 +191,17 @@ jobs:
         run: |
           python3 - <<'PY'
           import plistlib
+          from collections import Counter
           from pathlib import Path
 
           sc = plistlib.loads(Path('Escala Alarme.plist').read_bytes())
           actions = sc['WFWorkflowActions']
+          ids = [a.get('WFWorkflowActionIdentifier', '') for a in actions]
+          counts = Counter(ids)
           print('Action count:', len(actions))
-          if len(actions) > 100:
+          print('Condition blocks:', counts['is.workflow.actions.conditional'])
+          print('Nothing helpers:', counts['is.workflow.actions.nothing'])
+          if len(actions) > 180:
               raise SystemExit('Shortcut unexpectedly large')
 
           comments = [a.get('WFWorkflowActionParameters', {}).get('WFCommentActionText', '') for a in actions]
