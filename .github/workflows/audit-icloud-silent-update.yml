@@ -1,0 +1,130 @@
+name: Audit Apple Intelligence Silent Mode Update
+
+on:
+  push:
+    branches:
+      - chatgpt/escala-alarme-build-20260822
+    paths:
+      - '.github/workflows/audit-icloud-silent-update.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/audit-icloud-silent-update.yml'
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download old and new shortcuts and compare
+        run: |
+          python3 - <<'PY'
+          import json, plistlib, re
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+          from collections import Counter
+
+          IDS={
+            'old':'99abda03793c4862a401c41698d4507f',
+            'new':'cef3f849baf64e139aa09260ecf40b1a',
+          }
+
+          def load_shortcut(sid):
+              api=f'https://www.icloud.com/shortcuts/api/records/{sid}'
+              with urlopen(Request(api,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r:
+                  record=json.loads(r.read())
+              urls=[]
+              def walk(v):
+                  if isinstance(v,dict):
+                      for k,x in v.items():
+                          if k=='downloadURL' and isinstance(x,str): urls.append(x)
+                          walk(x)
+                  elif isinstance(v,list):
+                      for x in v: walk(x)
+              walk(record)
+              for url in urls:
+                  with urlopen(Request(url,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r:
+                      data=r.read()
+                  try: obj=plistlib.loads(data)
+                  except Exception: continue
+                  if isinstance(obj,dict) and 'WFWorkflowActions' in obj:
+                      return obj, data
+              raise RuntimeError('No parseable shortcut payload')
+
+          objs={}
+          for label,sid in IDS.items():
+              obj,data=load_shortcut(sid)
+              objs[label]=obj
+              Path(f'{label}.plist').write_bytes(plistlib.dumps(obj,fmt=plistlib.FMT_XML,sort_keys=False))
+              Path(f'{label}.shortcut').write_bytes(data)
+
+          old=objs['old']; new=objs['new']
+          old_actions=old['WFWorkflowActions']; new_actions=new['WFWorkflowActions']
+          old_ids=Counter(a.get('WFWorkflowActionIdentifier','') for a in old_actions)
+          new_ids=Counter(a.get('WFWorkflowActionIdentifier','') for a in new_actions)
+
+          id_delta={k:new_ids[k]-old_ids[k] for k in sorted(set(old_ids)|set(new_ids)) if new_ids[k]!=old_ids[k]}
+
+          def vars_of(actions):
+              out=[]
+              for i,a in enumerate(actions):
+                  if a.get('WFWorkflowActionIdentifier')=='is.workflow.actions.setvariable':
+                      out.append((i,a.get('WFWorkflowActionParameters',{}).get('WFVariableName')))
+              return out
+
+          old_vars=vars_of(old_actions); new_vars=vars_of(new_actions)
+          old_var_names=Counter(v for _,v in old_vars); new_var_names=Counter(v for _,v in new_vars)
+          var_delta={k:new_var_names[k]-old_var_names[k] for k in sorted(set(old_var_names)|set(new_var_names)) if new_var_names[k]!=old_var_names[k]}
+
+          # Candidate actions likely related to silent mode / ringtone / volume, plus actions using plantao_agora.
+          candidates=[]
+          keys=('silent','silence','ringer','ringtone','volume','audio','sound','plantao','mute')
+          for i,a in enumerate(new_actions):
+              ident=a.get('WFWorkflowActionIdentifier','')
+              p=a.get('WFWorkflowActionParameters',{})
+              blob=json.dumps({'id':ident,'p':p},ensure_ascii=False,default=str).lower()
+              if any(k in blob for k in keys):
+                  candidates.append({'index':i,'id':ident,'parameters':p})
+
+          # Preserve important counts to ensure old logic wasn't removed.
+          important_ids=[
+            'is.workflow.actions.filter.calendarevents',
+            'com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent',
+            'is.workflow.actions.dnd.set',
+            'is.workflow.actions.conditional',
+            'is.workflow.actions.setvariable',
+          ]
+          important={k:{'old':old_ids[k],'new':new_ids[k]} for k in important_ids}
+
+          report={
+            'old_client':old.get('WFWorkflowClientVersion'),
+            'new_client':new.get('WFWorkflowClientVersion'),
+            'old_min':old.get('WFWorkflowMinimumClientVersion'),
+            'new_min':new.get('WFWorkflowMinimumClientVersion'),
+            'old_action_count':len(old_actions),
+            'new_action_count':len(new_actions),
+            'identifier_delta':id_delta,
+            'variable_delta':var_delta,
+            'important_counts':important,
+            'candidate_actions':candidates,
+            'new_variables':new_vars,
+          }
+          Path('audit_silent.json').write_text(json.dumps(report,ensure_ascii=False,indent=2,default=str))
+          print(json.dumps({k:v for k,v in report.items() if k!='candidate_actions' and k!='new_variables'},ensure_ascii=False,indent=2))
+          print('candidate_count',len(candidates))
+          for c in candidates:
+              print('CANDIDATE',c['index'],c['id'])
+              print(json.dumps(c['parameters'],ensure_ascii=False,default=str)[:3000])
+          PY
+
+      - name: Upload audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-silent-update-audit
+          if-no-files-found: error
+          path: |
+            old.plist
+            new.plist
+            old.shortcut
+            new.shortcut
+            audit_silent.json
