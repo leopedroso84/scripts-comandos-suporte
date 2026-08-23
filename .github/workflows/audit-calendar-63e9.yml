@@ -6,22 +6,16 @@ on:
       - chatgpt/escala-alarme-build-20260822
     paths:
       - '.github/workflows/audit-calendar-63e9.yml'
-  pull_request:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/audit-calendar-63e9.yml'
 
 jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect corrected V2
+      - name: Inspect math expressions
         run: |
           python3 - <<'PY'
           import json, plistlib, time
           from urllib.request import Request, urlopen
-          from collections import Counter
           sid='63e919eda2a24e5fb55ed293b9ca6dbb'
           api=f'https://www.icloud.com/shortcuts/api/records/{sid}'
           rec=None
@@ -37,26 +31,13 @@ jobs:
               data=r.read()
           sc=plistlib.loads(data)
           actions=sc['WFWorkflowActions']
-          c=Counter(a.get('WFWorkflowActionIdentifier','') for a in actions)
-          print('CLIENT',sc.get('WFWorkflowClientVersion'))
           print('ACTIONS',len(actions))
-          print('CALENDAR',c['is.workflow.actions.filter.calendarevents'])
-          print('ALARMS',c['com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent'])
-          print('FOCUS',c['is.workflow.actions.dnd.set'])
-          print('SILENT',c['com.apple.ShortcutsActions.SetSilentModeAction'])
-          print('VOLUME',c['is.workflow.actions.setvolume'])
-          print('CALENDAR_ACTIONS')
-          for i,a in enumerate(actions):
-              if a.get('WFWorkflowActionIdentifier')=='is.workflow.actions.filter.calendarevents':
-                  print('ACTION',i,json.dumps(a.get('WFWorkflowActionParameters',{}),ensure_ascii=False,default=str))
-          print('DATE_ACTIONS')
-          for i,a in enumerate(actions):
-              if a.get('WFWorkflowActionIdentifier') in ('is.workflow.actions.date','is.workflow.actions.adjustdate','is.workflow.actions.format.date'):
-                  print('ACTION',i,a.get('WFWorkflowActionIdentifier'),json.dumps(a.get('WFWorkflowActionParameters',{}),ensure_ascii=False,default=str))
-          print('MODEL_SCAN')
+          print('FIRST_25')
+          for i,a in enumerate(actions[:25]):
+              print('ACTION',i,a.get('WFWorkflowActionIdentifier',''),json.dumps(a.get('WFWorkflowActionParameters',{}),ensure_ascii=False,default=str))
+          print('MATH_ACTIONS')
           for i,a in enumerate(actions):
               ident=a.get('WFWorkflowActionIdentifier','')
-              blob=json.dumps(a,ensure_ascii=False,default=str).lower()
-              if 'model' in ident.lower() or 'chatgpt' in blob or 'appleintelligence' in blob or 'usemodel' in blob:
-                  print('MODEL',i,ident)
+              if ident in ('is.workflow.actions.calculateexpression','is.workflow.actions.math'):
+                  print('ACTION',i,ident,json.dumps(a.get('WFWorkflowActionParameters',{}),ensure_ascii=False,default=str))
           PY
