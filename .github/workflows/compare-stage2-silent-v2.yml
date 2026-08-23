@@ -1,0 +1,78 @@
+name: Compare Working Stage2 vs Silent Update
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/compare-stage2-silent-v2.yml'
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download and compare shortcuts
+        run: |
+          python3 - <<'PY'
+          import json, plistlib, time, copy
+          from urllib.request import Request, urlopen
+          from collections import Counter
+
+          IDS={'old':'99abda03793c4862a401c41698d4507f','new':'9b1ea9fb7a7e4d4a9ac58683ebe7f1b0'}
+
+          def load(sid):
+              api=f'https://www.icloud.com/shortcuts/api/records/{sid}'
+              rec=None
+              for n in range(7):
+                  try:
+                      with urlopen(Request(api,headers={'User-Agent':'Mozilla/5.0'}),timeout=25) as r:
+                          rec=json.loads(r.read()); break
+                  except Exception as e:
+                      print('retry',sid,n+1,repr(e)); time.sleep(2)
+              if rec is None: raise RuntimeError('record unavailable '+sid)
+              url=rec['fields']['shortcut']['value']['downloadURL']
+              with urlopen(Request(url,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r:
+                  data=r.read()
+              return plistlib.loads(data)
+
+          old=load(IDS['old']); new=load(IDS['new'])
+          oa=old['WFWorkflowActions']; na=new['WFWorkflowActions']
+          print('COUNTS old',len(oa),'new',len(na),'delta',len(na)-len(oa))
+
+          def auuid(a): return a.get('WFWorkflowActionParameters',{}).get('UUID') or a.get('UUID')
+          om={auuid(a):(i,a) for i,a in enumerate(oa) if auuid(a)}
+          nm={auuid(a):(i,a) for i,a in enumerate(na) if auuid(a)}
+          common=set(om)&set(nm); oldonly=set(om)-set(nm); newonly=set(nm)-set(om)
+          print('UUIDS common',len(common),'oldonly',len(oldonly),'newonly',len(newonly))
+
+          changed=[]
+          def norm(a):
+              x=copy.deepcopy(a)
+              # exact comparison for common action UUIDs, but ignore only sequence-dependent grouping IDs
+              p=x.get('WFWorkflowActionParameters',{})
+              p.pop('GroupingIdentifier',None)
+              return x
+          for u in common:
+              oi,a=om[u]; ni,b=nm[u]
+              if norm(a)!=norm(b):
+                  changed.append((oi,ni,u,a.get('WFWorkflowActionIdentifier'),b.get('WFWorkflowActionIdentifier')))
+          print('COMMON_CHANGED',len(changed))
+          for row in sorted(changed)[:100]: print('CHANGED',row)
+
+          print('OLD_ONLY')
+          for u in sorted(oldonly,key=lambda x:om[x][0]):
+              i,a=om[u]; print(i,u,a.get('WFWorkflowActionIdentifier'),json.dumps(a.get('WFWorkflowActionParameters',{}),ensure_ascii=False,default=str)[:1000])
+          print('NEW_ONLY')
+          for u in sorted(newonly,key=lambda x:nm[x][0]):
+              i,a=nm[u]; print(i,u,a.get('WFWorkflowActionIdentifier'),json.dumps(a.get('WFWorkflowActionParameters',{}),ensure_ascii=False,default=str)[:1300])
+
+          for ident in ['is.workflow.actions.filter.calendarevents','com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent','is.workflow.actions.dnd.set','com.apple.ShortcutsActions.SetSilentModeAction','is.workflow.actions.setvolume']:
+              print('IDCOUNT',ident,sum(a.get('WFWorkflowActionIdentifier')==ident for a in oa),sum(a.get('WFWorkflowActionIdentifier')==ident for a in na))
+
+          # confirm whether any model/AI action exists
+          for i,a in enumerate(na):
+              ident=a.get('WFWorkflowActionIdentifier','')
+              blob=json.dumps(a,ensure_ascii=False,default=str).lower()
+              if 'model' in ident.lower() or 'usemodel' in blob or 'chatgpt' in blob or 'appleintelligence' in blob:
+                  print('MODEL_CANDIDATE',i,ident,json.dumps(a.get('WFWorkflowActionParameters',{}),ensure_ascii=False,default=str)[:1500])
+          PY
