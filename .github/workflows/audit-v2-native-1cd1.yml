@@ -1,0 +1,75 @@
+name: Audit Alarme Trabalho V2 Native
+
+on:
+  push:
+    branches:
+      - chatgpt/escala-alarme-build-20260822
+    paths:
+      - '.github/workflows/audit-v2-native-1cd1.yml'
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download and inspect shortcut
+        run: |
+          python3 - <<'PY'
+          import json, plistlib, time
+          from urllib.request import Request, urlopen
+          from collections import Counter
+          sid='1cd1dd917df74a6cbf51e3b1389baf9b'
+          api=f'https://www.icloud.com/shortcuts/api/records/{sid}'
+          rec=None
+          for n in range(8):
+              try:
+                  with urlopen(Request(api,headers={'User-Agent':'Mozilla/5.0'}),timeout=30) as r:
+                      rec=json.loads(r.read()); break
+              except Exception as e:
+                  print('retry',n+1,repr(e)); time.sleep(2)
+          if rec is None: raise SystemExit('record unavailable')
+          url=rec['fields']['shortcut']['value']['downloadURL']
+          with urlopen(Request(url,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r:
+              data=r.read()
+          sc=plistlib.loads(data)
+          actions=sc['WFWorkflowActions']
+          print('CLIENT',sc.get('WFWorkflowClientVersion'))
+          print('ACTIONS',len(actions))
+          c=Counter(a.get('WFWorkflowActionIdentifier','') for a in actions)
+          for ident in [
+            'is.workflow.actions.filter.calendarevents',
+            'com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent',
+            'is.workflow.actions.dnd.set',
+            'is.workflow.actions.setvariable',
+            'is.workflow.actions.conditional',
+            'com.apple.ShortcutsActions.SetSilentModeAction',
+            'is.workflow.actions.setvolume']:
+              print('COUNT',ident,c[ident])
+          print('VARIABLES')
+          for i,a in enumerate(actions):
+              if a.get('WFWorkflowActionIdentifier')=='is.workflow.actions.setvariable':
+                  print(i,a.get('WFWorkflowActionParameters',{}).get('WFVariableName'))
+          print('IDENTIFIERS')
+          for ident,n in c.most_common(): print(n,ident)
+          print('RELEVANT')
+          keys=('minha_semana_hoje','minha_semana_amanha','dia_hoje','dia_amanha','tem_feriado_hoje','tem_feriado_amanha','eh_cinzas_hoje','eh_cinzas_amanha','trabalhando','Folga','Sono','07:00','07:45','Carnaval','Cinzas')
+          for i,a in enumerate(actions):
+              ident=a.get('WFWorkflowActionIdentifier','')
+              p=a.get('WFWorkflowActionParameters',{})
+              blob=json.dumps({'id':ident,'p':p},ensure_ascii=False,default=str)
+              if any(k in blob for k in keys) or ident in ('is.workflow.actions.filter.calendarevents','com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent','is.workflow.actions.dnd.set'):
+                  print('ACTION',i,ident,json.dumps(p,ensure_ascii=False,default=str)[:6000])
+          print('MODEL_SCAN')
+          for i,a in enumerate(actions):
+              ident=a.get('WFWorkflowActionIdentifier','')
+              blob=json.dumps(a,ensure_ascii=False,default=str).lower()
+              if 'model' in ident.lower() or 'chatgpt' in blob or 'appleintelligence' in blob or 'usemodel' in blob:
+                  print('MODEL',i,ident,json.dumps(a.get('WFWorkflowActionParameters',{}),ensure_ascii=False,default=str)[:2000])
+          open('v2_unsigned.shortcut','wb').write(data)
+          open('v2.plist','wb').write(plistlib.dumps(sc,fmt=plistlib.FMT_XML,sort_keys=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alarme-trabalho-v2-audit
+          path: |
+            v2_unsigned.shortcut
+            v2.plist
