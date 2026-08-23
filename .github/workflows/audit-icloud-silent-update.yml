@@ -16,72 +16,60 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Download old and new shortcuts and compare
+      - name: Inspect new V2 silent update
         run: |
           python3 - <<'PY'
           import json, plistlib, time
-          from pathlib import Path
           from urllib.request import Request, urlopen
           from collections import Counter
-
-          IDS={'old':'06f361bac07f43e5b03e343b81d34208','new':'c9baeee2ae8e49829702dec31f4c5346'}
-
-          def load_shortcut(sid):
-              api=f'https://www.icloud.com/shortcuts/api/records/{sid}'
-              rec=None
-              for n in range(8):
-                  try:
-                      with urlopen(Request(api,headers={'User-Agent':'Mozilla/5.0'}),timeout=30) as r:
-                          rec=json.loads(r.read()); break
-                  except Exception as e:
-                      print('retry',sid,n+1,repr(e)); time.sleep(2)
-              if rec is None: raise RuntimeError('record unavailable '+sid)
-              urls=[]
-              def walk(v):
-                  if isinstance(v,dict):
-                      for k,x in v.items():
-                          if k=='downloadURL' and isinstance(x,str): urls.append(x)
-                          walk(x)
-                  elif isinstance(v,list):
-                      for x in v: walk(x)
-              walk(rec)
-              for url in urls:
-                  with urlopen(Request(url,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r:
-                      data=r.read()
-                  try: obj=plistlib.loads(data)
-                  except Exception: continue
-                  if isinstance(obj,dict) and 'WFWorkflowActions' in obj: return obj,data
-              raise RuntimeError('no parseable payload '+sid)
-
-          objs={}
-          for label,sid in IDS.items():
-              obj,data=load_shortcut(sid); objs[label]=obj
-              Path(f'{label}.plist').write_bytes(plistlib.dumps(obj,fmt=plistlib.FMT_XML,sort_keys=False))
-
-          old=objs['old']; new=objs['new']; oa=old['WFWorkflowActions']; na=new['WFWorkflowActions']
-          oc=Counter(a.get('WFWorkflowActionIdentifier','') for a in oa); nc=Counter(a.get('WFWorkflowActionIdentifier','') for a in na)
-          print('ACTIONS',len(oa),len(na))
+          sid='c9baeee2ae8e49829702dec31f4c5346'
+          api=f'https://www.icloud.com/shortcuts/api/records/{sid}'
+          rec=None
+          for n in range(12):
+              try:
+                  with urlopen(Request(api,headers={'User-Agent':'Mozilla/5.0'}),timeout=30) as r:
+                      rec=json.loads(r.read()); break
+              except Exception as e:
+                  print('retry',n+1,repr(e)); time.sleep(2)
+          if rec is None: raise RuntimeError('record unavailable')
+          urls=[]
+          def walk(v):
+              if isinstance(v,dict):
+                  for k,x in v.items():
+                      if k=='downloadURL' and isinstance(x,str): urls.append(x)
+                      walk(x)
+              elif isinstance(v,list):
+                  for x in v: walk(x)
+          walk(rec)
+          obj=None
+          for url in urls:
+              with urlopen(Request(url,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r: data=r.read()
+              try: cand=plistlib.loads(data)
+              except Exception: continue
+              if isinstance(cand,dict) and 'WFWorkflowActions' in cand: obj=cand; break
+          if obj is None: raise RuntimeError('no parseable payload')
+          a=obj['WFWorkflowActions']; c=Counter(x.get('WFWorkflowActionIdentifier','') for x in a)
+          print('CLIENT',obj.get('WFWorkflowClientVersion'))
+          print('ACTIONS',len(a))
           for ident in ['is.workflow.actions.gettimebetweendates','is.workflow.actions.format.date','is.workflow.actions.calculateexpression','is.workflow.actions.math','is.workflow.actions.filter.calendarevents','com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent','is.workflow.actions.dnd.set','com.apple.ShortcutsActions.SetSilentModeAction','is.workflow.actions.setvolume','is.workflow.actions.setvariable','is.workflow.actions.conditional']:
-              print('COUNT',ident,oc[ident],nc[ident],'DELTA',nc[ident]-oc[ident])
-          print('ALL_DELTAS')
-          for k in sorted(set(oc)|set(nc)):
-              if oc[k]!=nc[k]: print(k,oc[k],nc[k],nc[k]-oc[k])
-          print('VARIABLE_DELTAS')
-          def vcount(actions):
-              return Counter(a.get('WFWorkflowActionParameters',{}).get('WFVariableName') for a in actions if a.get('WFWorkflowActionIdentifier')=='is.workflow.actions.setvariable')
-          ov=vcount(oa); nv=vcount(na)
-          for k in sorted(set(ov)|set(nv),key=lambda x:str(x)):
-              if ov[k]!=nv[k]: print('VAR',k,ov[k],nv[k],nv[k]-ov[k])
-          print('SOUND_AND_PLANTAO')
-          for i,a in enumerate(na):
-              ident=a.get('WFWorkflowActionIdentifier',''); p=a.get('WFWorkflowActionParameters',{})
+              print('COUNT',ident,c[ident])
+          print('VARIABLES')
+          for i,x in enumerate(a):
+              if x.get('WFWorkflowActionIdentifier')=='is.workflow.actions.setvariable':
+                  print('VAR',i,x.get('WFWorkflowActionParameters',{}).get('WFVariableName'))
+          print('PLANTAO_CONTEXT')
+          for i,x in enumerate(a):
+              ident=x.get('WFWorkflowActionIdentifier',''); p=x.get('WFWorkflowActionParameters',{})
               blob=json.dumps({'id':ident,'p':p},ensure_ascii=False,default=str).lower()
               if 'plantao_agora' in blob or ident in ('com.apple.ShortcutsActions.SetSilentModeAction','is.workflow.actions.setvolume') or 'ringtone' in blob:
-                  print('ACTION',i,ident,json.dumps(p,ensure_ascii=False,default=str)[:5000])
+                  lo=max(0,i-2); hi=min(len(a),i+3)
+                  print('--- around',i,'---')
+                  for j in range(lo,hi):
+                      y=a[j]; print('ACTION',j,y.get('WFWorkflowActionIdentifier',''),json.dumps(y.get('WFWorkflowActionParameters',{}),ensure_ascii=False,default=str)[:4000])
           print('MODEL_SCAN')
-          for i,a in enumerate(na):
-              ident=a.get('WFWorkflowActionIdentifier','')
-              blob=json.dumps(a,ensure_ascii=False,default=str).lower()
+          for i,x in enumerate(a):
+              ident=x.get('WFWorkflowActionIdentifier','')
+              blob=json.dumps(x,ensure_ascii=False,default=str).lower()
               if 'model' in ident.lower() or 'chatgpt' in blob or 'appleintelligence' in blob or 'usemodel' in blob:
                   print('MODEL',i,ident)
           PY
