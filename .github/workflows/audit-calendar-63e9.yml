@@ -1,4 +1,4 @@
-name: Audit Calendar Fix 63e9
+name: Audit V2 Math Fix 06f3
 
 on:
   push:
@@ -6,22 +6,18 @@ on:
       - chatgpt/escala-alarme-build-20260822
     paths:
       - '.github/workflows/audit-calendar-63e9.yml'
-  pull_request:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/audit-calendar-63e9.yml'
 
 jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect math expressions
+      - name: Inspect corrected math and preserved structure
         run: |
           python3 - <<'PY'
           import json, plistlib, time
           from urllib.request import Request, urlopen
-          sid='63e919eda2a24e5fb55ed293b9ca6dbb'
+          from collections import Counter
+          sid='06f361bac07f43e5b03e343b81d34208'
           api=f'https://www.icloud.com/shortcuts/api/records/{sid}'
           rec=None
           for n in range(8):
@@ -36,13 +32,35 @@ jobs:
               data=r.read()
           sc=plistlib.loads(data)
           actions=sc['WFWorkflowActions']
+          c=Counter(a.get('WFWorkflowActionIdentifier','') for a in actions)
+          print('CLIENT',sc.get('WFWorkflowClientVersion'))
           print('ACTIONS',len(actions))
-          print('FIRST_25')
-          for i,a in enumerate(actions[:25]):
-              print('ACTION',i,a.get('WFWorkflowActionIdentifier',''),json.dumps(a.get('WFWorkflowActionParameters',{}),ensure_ascii=False,default=str))
-          print('MATH_ACTIONS')
+          for ident in [
+            'is.workflow.actions.gettimebetweendates',
+            'is.workflow.actions.format.date',
+            'is.workflow.actions.number',
+            'is.workflow.actions.calculateexpression',
+            'is.workflow.actions.math',
+            'is.workflow.actions.filter.calendarevents',
+            'com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent',
+            'is.workflow.actions.dnd.set',
+            'com.apple.ShortcutsActions.SetSilentModeAction',
+            'is.workflow.actions.setvolume']:
+              print('COUNT',ident,c[ident])
+          print('DATE_MATH_RELEVANT')
           for i,a in enumerate(actions):
               ident=a.get('WFWorkflowActionIdentifier','')
-              if ident in ('is.workflow.actions.calculateexpression','is.workflow.actions.math'):
+              if ident in ('is.workflow.actions.date','is.workflow.actions.adjustdate','is.workflow.actions.gettimebetweendates','is.workflow.actions.format.date','is.workflow.actions.number','is.workflow.actions.calculateexpression','is.workflow.actions.math'):
                   print('ACTION',i,ident,json.dumps(a.get('WFWorkflowActionParameters',{}),ensure_ascii=False,default=str))
+          print('CALENDAR_FOCUS_ALARMS')
+          for i,a in enumerate(actions):
+              ident=a.get('WFWorkflowActionIdentifier','')
+              if ident in ('is.workflow.actions.filter.calendarevents','is.workflow.actions.dnd.set','com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent'):
+                  print('ACTION',i,ident,json.dumps(a.get('WFWorkflowActionParameters',{}),ensure_ascii=False,default=str)[:2500])
+          print('MODEL_SCAN')
+          for i,a in enumerate(actions):
+              ident=a.get('WFWorkflowActionIdentifier','')
+              blob=json.dumps(a,ensure_ascii=False,default=str).lower()
+              if 'model' in ident.lower() or 'chatgpt' in blob or 'appleintelligence' in blob or 'usemodel' in blob:
+                  print('MODEL',i,ident)
           PY
