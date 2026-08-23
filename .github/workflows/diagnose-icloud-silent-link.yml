@@ -1,0 +1,79 @@
+name: Diagnose iCloud Silent Shortcut Payload
+
+on:
+  push:
+    branches:
+      - chatgpt/escala-alarme-build-20260822
+    paths:
+      - '.github/workflows/diagnose-icloud-silent-link.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/diagnose-icloud-silent-link.yml'
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect record and linked payloads
+        run: |
+          python3 - <<'PY'
+          import json, time
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+          from urllib.error import HTTPError
+
+          sid='cef3f849baf64e139aa09260ecf40b1a'
+          api=f'https://www.icloud.com/shortcuts/api/records/{sid}'
+          record=None
+          for attempt in range(5):
+              try:
+                  with urlopen(Request(api,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r:
+                      record=json.loads(r.read())
+                  break
+              except Exception as e:
+                  print('record attempt',attempt+1,'failed',repr(e))
+                  time.sleep(3)
+          if record is None: raise SystemExit('record unavailable')
+          Path('record.json').write_text(json.dumps(record,ensure_ascii=False,indent=2))
+
+          found=[]
+          def walk(v,path='root'):
+              if isinstance(v,dict):
+                  for k,x in v.items():
+                      p=f'{path}.{k}'
+                      if k=='downloadURL' and isinstance(x,str): found.append((p,x))
+                      walk(x,p)
+              elif isinstance(v,list):
+                  for i,x in enumerate(v): walk(x,f'{path}[{i}]')
+          walk(record)
+          print('download urls',len(found))
+          meta=[]
+          for idx,(path,url) in enumerate(found):
+              entry={'index':idx,'path':path,'url':url}
+              try:
+                  with urlopen(Request(url,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r:
+                      data=r.read()
+                      entry['status']=getattr(r,'status',200)
+                      entry['content_type']=r.headers.get('content-type')
+                  entry['size']=len(data)
+                  entry['prefix_hex']=data[:32].hex()
+                  entry['prefix_ascii']=''.join(chr(b) if 32<=b<127 else '.' for b in data[:32])
+                  Path(f'payload_{idx}.bin').write_bytes(data)
+              except Exception as e:
+                  entry['error']=repr(e)
+              meta.append(entry)
+          Path('payload_meta.json').write_text(json.dumps(meta,ensure_ascii=False,indent=2))
+          print(json.dumps(meta,ensure_ascii=False,indent=2))
+          PY
+
+      - name: Upload diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: icloud-silent-link-diagnostics
+          if-no-files-found: error
+          path: |
+            record.json
+            payload_meta.json
+            payload_*.bin
