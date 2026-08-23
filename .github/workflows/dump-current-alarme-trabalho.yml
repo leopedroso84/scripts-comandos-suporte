@@ -1,0 +1,39 @@
+name: Dump Current Alarme Trabalho
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/dump-current-alarme-trabalho.yml'
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download shortcut
+        run: |
+          python3 - <<'PY'
+          import json, time
+          from urllib.request import Request, urlopen
+          from pathlib import Path
+          sid='9b1ea9fb7a7e4d4a9ac58683ebe7f1b0'
+          api=f'https://www.icloud.com/shortcuts/api/records/{sid}'
+          rec=None
+          for n in range(8):
+              try:
+                  with urlopen(Request(api,headers={'User-Agent':'Mozilla/5.0'}),timeout=25) as r:
+                      rec=json.loads(r.read()); break
+              except Exception as e:
+                  print('retry',n+1,repr(e)); time.sleep(2)
+          if rec is None: raise SystemExit('record unavailable')
+          url=rec['fields']['shortcut']['value']['downloadURL']
+          with urlopen(Request(url,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r:
+              data=r.read()
+          Path('current_alarme_trabalho.shortcut').write_bytes(data)
+          print('SIZE',len(data))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: current-alarme-trabalho
+          path: current_alarme_trabalho.shortcut
