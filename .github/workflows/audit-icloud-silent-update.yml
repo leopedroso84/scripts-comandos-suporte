@@ -6,60 +6,48 @@ on:
       - chatgpt/escala-alarme-build-20260822
     paths:
       - '.github/workflows/audit-icloud-silent-update.yml'
-  pull_request:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/audit-icloud-silent-update.yml'
 
 jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect current alarm actions and popup parameters
+      - name: Compare working Stage2 alarm intents with current popup version
         run: |
           python3 - <<'PY'
           import json, plistlib, time
           from urllib.request import Request, urlopen
-          sid='512e1e6a3c404f6894c674410f0fed65'
-          api=f'https://www.icloud.com/shortcuts/api/records/{sid}'
-          rec=None
-          for n in range(12):
-              try:
-                  with urlopen(Request(api,headers={'User-Agent':'Mozilla/5.0'}),timeout=30) as r:
-                      rec=json.loads(r.read()); break
-              except Exception as e:
-                  print('retry',n+1,repr(e)); time.sleep(2)
-          if rec is None: raise RuntimeError('record unavailable')
-          urls=[]
-          def walk(v):
-              if isinstance(v,dict):
-                  for k,x in v.items():
-                      if k=='downloadURL' and isinstance(x,str): urls.append(x)
-                      walk(x)
-              elif isinstance(v,list):
-                  for x in v: walk(x)
-          walk(rec)
-          obj=None
-          for url in urls:
-              with urlopen(Request(url,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r: data=r.read()
-              try: candidate=plistlib.loads(data)
-              except Exception: continue
-              if isinstance(candidate,dict) and 'WFWorkflowActions' in candidate:
-                  obj=candidate; break
-          if obj is None: raise RuntimeError('no parseable payload')
-          a=obj['WFWorkflowActions']
-          print('ACTIONS',len(a))
+          IDS={'stage2':'99abda03793c4862a401c41698d4507f','current':'512e1e6a3c404f6894c674410f0fed65'}
+          def load(sid):
+              api=f'https://www.icloud.com/shortcuts/api/records/{sid}'
+              rec=None
+              for n in range(12):
+                  try:
+                      with urlopen(Request(api,headers={'User-Agent':'Mozilla/5.0'}),timeout=30) as r:
+                          rec=json.loads(r.read()); break
+                  except Exception as e:
+                      print('retry',sid,n+1,repr(e)); time.sleep(2)
+              if rec is None: raise RuntimeError('record unavailable '+sid)
+              urls=[]
+              def walk(v):
+                  if isinstance(v,dict):
+                      for k,x in v.items():
+                          if k=='downloadURL' and isinstance(x,str): urls.append(x)
+                          walk(x)
+                  elif isinstance(v,list):
+                      for x in v: walk(x)
+              walk(rec)
+              for url in urls:
+                  with urlopen(Request(url,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r: data=r.read()
+                  try: obj=plistlib.loads(data)
+                  except Exception: continue
+                  if isinstance(obj,dict) and 'WFWorkflowActions' in obj: return obj
+              raise RuntimeError('no parseable payload '+sid)
+          O={k:load(v) for k,v in IDS.items()}
           alarm_id='com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent'
-          print('ALARM_ACTIONS_FULL')
-          for i,x in enumerate(a):
-              if x.get('WFWorkflowActionIdentifier')==alarm_id:
-                  print('--- ALARM',i,'---')
-                  print(json.dumps(x,ensure_ascii=False,default=str,sort_keys=True))
-          print('UI_OR_DIALOG_RELATED_ACTIONS')
-          for i,x in enumerate(a):
-              ident=x.get('WFWorkflowActionIdentifier','')
-              blob=json.dumps(x,ensure_ascii=False,default=str).lower()
-              if any(k in ident.lower() for k in ['alert','result','notification','show','prompt','ask']) or any(k in blob for k in ['show when run','showwhenrun','show_result','showresult','dialog','confirmation']):
-                  print(i,ident,json.dumps(x,ensure_ascii=False,default=str,sort_keys=True)[:4000])
+          for k,obj in O.items():
+              print('\n###',k,'ACTIONS',len(obj['WFWorkflowActions']))
+              for i,x in enumerate(obj['WFWorkflowActions']):
+                  if x.get('WFWorkflowActionIdentifier')==alarm_id:
+                      print('ALARM_INDEX',i)
+                      print(json.dumps(x,ensure_ascii=False,sort_keys=True,default=str))
           PY
