@@ -1,0 +1,146 @@
+name: Repack Escala Alarme iOS 27
+
+on:
+  push:
+    branches:
+      - chatgpt/escala-alarme-build-20260822
+    paths:
+      - '.github/workflows/resign-escala-ios27.yml'
+  workflow_dispatch:
+
+jobs:
+  repack:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Download validated build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir source
+          gh run download 32595411788 --repo leopedroso84/scripts-comandos-suporte --name escala-alarme-final --dir source
+          ls -la source
+
+      - name: Repack with native iOS 27 metadata and exact alarm actions
+        run: |
+          python3 - <<'PY'
+          import copy, plistlib
+          from pathlib import Path
+
+          root = Path('source')
+          sc = plistlib.loads((root / 'Escala Alarme.plist').read_bytes())
+          donor = plistlib.loads((root / 'donor.plist').read_bytes())
+
+          # The donor was exported by the same iPhone/iOS build. Copy its workflow
+          # compatibility envelope so App Intents introduced in the newer Shortcuts
+          # client are not interpreted under the older Cherri metadata.
+          for key, value in donor.items():
+              if key not in ('WFWorkflowActions', 'WFWorkflowIcon'):
+                  sc[key] = copy.deepcopy(value)
+
+          def params(a):
+              return a.get('WFWorkflowActionParameters', {})
+
+          donor_alarm = []
+          used = set()
+          for a in donor['WFWorkflowActions']:
+              if a.get('WFWorkflowActionIdentifier') == 'com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent':
+                  donor_alarm.append(a)
+
+          def pick(hour, enabled):
+              for i, a in enumerate(donor_alarm):
+                  if i in used:
+                      continue
+                  p = params(a)
+                  title = p.get('alarm', {}).get('title', {}).get('key', '')
+                  is_on = p.get('state', True) is not False
+                  if hour in title and is_on == enabled:
+                      used.add(i)
+                      return copy.deepcopy(a)
+              raise SystemExit(f'No exact donor alarm action for {hour} enabled={enabled}')
+
+          replacements = {
+              ('07:00', False): pick('07:00', False),
+              ('07:45', False): pick('07:45', False),
+              ('07:00', True): pick('07:00', True),
+              ('07:45', True): pick('07:45', True),
+          }
+
+          new_actions = []
+          seen = {k: 0 for k in replacements}
+          for a in sc['WFWorkflowActions']:
+              if a.get('WFWorkflowActionIdentifier') != 'com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent':
+                  new_actions.append(a)
+                  continue
+              p = params(a)
+              title = p.get('alarm', {}).get('title', {}).get('key', '')
+              hour = '07:45' if '07:45' in title else '07:00'
+              enabled = p.get('state', True) is not False
+              key = (hour, enabled)
+              if key not in replacements:
+                  raise SystemExit(f'Unexpected final alarm action {key}')
+              new_actions.append(copy.deepcopy(replacements[key]))
+              seen[key] += 1
+
+          if any(v != 1 for v in seen.values()):
+              raise SystemExit(f'Alarm replacement count wrong: {seen}')
+
+          sc['WFWorkflowActions'] = new_actions
+
+          # Hard validation of the exact compatibility envelope observed on the donor.
+          if sc.get('WFWorkflowClientVersion') != donor.get('WFWorkflowClientVersion'):
+              raise SystemExit('Client version transplant failed')
+          if sc.get('WFWorkflowMinimumClientVersion') != donor.get('WFWorkflowMinimumClientVersion'):
+              raise SystemExit('Minimum client version transplant failed')
+
+          alarm_actions = [a for a in new_actions if a.get('WFWorkflowActionIdentifier') == 'com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent']
+          if len(alarm_actions) != 4:
+              raise SystemExit(f'Expected 4 alarm actions, got {len(alarm_actions)}')
+          uuids = [params(a).get('UUID') for a in alarm_actions]
+          if len(set(uuids)) != 4:
+              raise SystemExit('Alarm UUIDs are not unique')
+
+          (root / 'Escala Alarme iOS27.plist').write_bytes(plistlib.dumps(sc, fmt=plistlib.FMT_XML, sort_keys=False))
+          (root / 'Escala Alarme iOS27_unsigned.shortcut').write_bytes(plistlib.dumps(sc, fmt=plistlib.FMT_BINARY, sort_keys=False))
+          print('Client version:', sc['WFWorkflowClientVersion'])
+          print('Minimum client version:', sc['WFWorkflowMinimumClientVersion'])
+          print('Alarm UUIDs:', uuids)
+          print('Actions:', len(new_actions))
+          PY
+
+      - name: Sign repaired Shortcut
+        run: |
+          python3 - <<'PY'
+          import json, plistlib
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+
+          root = Path('source')
+          sc = plistlib.loads((root / 'Escala Alarme iOS27.plist').read_bytes())
+          xml = plistlib.dumps(sc, fmt=plistlib.FMT_XML).decode('utf-8')
+          payload = json.dumps({'shortcutName':'Escala Alarme iOS27','shortcut':xml}).encode()
+          req = Request('https://hubsign.routinehub.services/sign', data=payload, headers={
+              'Content-Type':'application/json',
+              'User-Agent':'cherri/2.3.0',
+              'Origin':'https://routinehub.co',
+              'Referer':'https://routinehub.co/'
+          }, method='POST')
+          with urlopen(req, timeout=45) as r:
+              signed = r.read()
+          if signed[:4] != b'AEA1':
+              raise SystemExit(f'Bad signature payload: {signed[:16]!r}')
+          (root / 'Escala Alarme iOS27.shortcut').write_bytes(signed)
+          print('Signed bytes:', len(signed), 'AEA1 OK')
+          PY
+
+      - name: Upload repaired build
+        uses: actions/upload-artifact@v4
+        with:
+          name: escala-alarme-ios27-fixed
+          if-no-files-found: error
+          path: |
+            source/Escala Alarme iOS27.shortcut
+            source/Escala Alarme iOS27_unsigned.shortcut
+            source/Escala Alarme iOS27.plist

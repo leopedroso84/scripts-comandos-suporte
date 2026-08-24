@@ -1,0 +1,106 @@
+name: Validate Escala Alarme iOS 27 Repack
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/repack-escala-ios27-pr.yml'
+
+jobs:
+  repack:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Download validated build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir source
+          gh run download 32595411788 --repo leopedroso84/scripts-comandos-suporte --name escala-alarme-final --dir source
+
+      - name: Repack for exact donor compatibility
+        run: |
+          python3 - <<'PY'
+          import copy, plistlib
+          from pathlib import Path
+          root=Path('source')
+          sc=plistlib.loads((root/'Escala Alarme.plist').read_bytes())
+          donor=plistlib.loads((root/'donor.plist').read_bytes())
+
+          # Exact top-level compatibility metadata from the same iPhone/iOS build.
+          for k,v in donor.items():
+              if k not in ('WFWorkflowActions','WFWorkflowIcon'):
+                  sc[k]=copy.deepcopy(v)
+
+          def p(a): return a.get('WFWorkflowActionParameters',{})
+          donor_alarms=[a for a in donor['WFWorkflowActions'] if a.get('WFWorkflowActionIdentifier')=='com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent']
+          used=set()
+          def pick(hour,on):
+              for i,a in enumerate(donor_alarms):
+                  if i in used: continue
+                  pp=p(a); title=pp.get('alarm',{}).get('title',{}).get('key','')
+                  state=pp.get('state',True) is not False
+                  if hour in title and state==on:
+                      used.add(i); return copy.deepcopy(a)
+              raise SystemExit(f'No donor alarm {hour} on={on}')
+
+          exact={
+              ('07:00',False):pick('07:00',False),
+              ('07:45',False):pick('07:45',False),
+              ('07:00',True):pick('07:00',True),
+              ('07:45',True):pick('07:45',True),
+          }
+          counts={k:0 for k in exact}
+          out=[]
+          for a in sc['WFWorkflowActions']:
+              if a.get('WFWorkflowActionIdentifier')!='com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent':
+                  out.append(a); continue
+              pp=p(a); title=pp.get('alarm',{}).get('title',{}).get('key','')
+              key=('07:45' if '07:45' in title else '07:00', pp.get('state',True) is not False)
+              out.append(copy.deepcopy(exact[key])); counts[key]+=1
+          if counts != {k:1 for k in exact}: raise SystemExit(f'Bad replacement counts {counts}')
+          sc['WFWorkflowActions']=out
+
+          assert sc['WFWorkflowClientVersion']=='5037.109', sc['WFWorkflowClientVersion']
+          assert sc['WFWorkflowMinimumClientVersion']==5001, sc['WFWorkflowMinimumClientVersion']
+          aa=[a for a in out if a.get('WFWorkflowActionIdentifier')=='com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent']
+          assert len(aa)==4
+          assert len({p(a)['UUID'] for a in aa})==4
+          assert len([a for a in out if a.get('WFWorkflowActionIdentifier')=='is.workflow.actions.filter.calendarevents'])==2
+          assert len([a for a in out if a.get('WFWorkflowActionIdentifier')=='is.workflow.actions.dnd.set'])==5
+
+          (root/'Escala Alarme iOS27.plist').write_bytes(plistlib.dumps(sc,fmt=plistlib.FMT_XML,sort_keys=False))
+          (root/'Escala Alarme iOS27_unsigned.shortcut').write_bytes(plistlib.dumps(sc,fmt=plistlib.FMT_BINARY,sort_keys=False))
+          print('Compatibility metadata:',sc['WFWorkflowClientVersion'],sc['WFWorkflowMinimumClientVersion'])
+          print('Alarm UUIDs:',[p(a)['UUID'] for a in aa])
+          print('Validation OK; actions:',len(out))
+          PY
+
+      - name: Sign iOS 27 repack
+        run: |
+          python3 - <<'PY'
+          import json,plistlib
+          from pathlib import Path
+          from urllib.request import Request,urlopen
+          root=Path('source')
+          sc=plistlib.loads((root/'Escala Alarme iOS27.plist').read_bytes())
+          xml=plistlib.dumps(sc,fmt=plistlib.FMT_XML).decode()
+          req=Request('https://hubsign.routinehub.services/sign',data=json.dumps({'shortcutName':'Escala Alarme iOS27','shortcut':xml}).encode(),headers={'Content-Type':'application/json','User-Agent':'cherri/2.3.0','Origin':'https://routinehub.co','Referer':'https://routinehub.co/'},method='POST')
+          with urlopen(req,timeout=45) as r: signed=r.read()
+          if signed[:4]!=b'AEA1': raise SystemExit(f'Bad signature {signed[:16]!r}')
+          (root/'Escala Alarme iOS27.shortcut').write_bytes(signed)
+          print('AEA1 OK:',len(signed),'bytes')
+          PY
+
+      - name: Upload iOS 27 fixed build
+        uses: actions/upload-artifact@v4
+        with:
+          name: escala-alarme-ios27-fixed-pr
+          if-no-files-found: error
+          path: |
+            source/Escala Alarme iOS27.shortcut
+            source/Escala Alarme iOS27_unsigned.shortcut
+            source/Escala Alarme iOS27.plist

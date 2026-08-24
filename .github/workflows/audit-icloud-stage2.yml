@@ -1,0 +1,119 @@
+name: Audit Apple Intelligence Shortcut Stage 2
+
+on:
+  push:
+    branches:
+      - chatgpt/escala-alarme-build-20260822
+    paths:
+      - '.github/workflows/audit-icloud-stage2.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/audit-icloud-stage2.yml'
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download iCloud shortcut
+        run: |
+          python3 - <<'PY'
+          import json, plistlib
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+
+          shortcut_id='99abda03793c4862a401c41698d4507f'
+          api=f'https://www.icloud.com/shortcuts/api/records/{shortcut_id}'
+          with urlopen(Request(api,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r:
+              record=json.loads(r.read())
+          urls=[]
+          def walk(v):
+              if isinstance(v,dict):
+                  for k,x in v.items():
+                      if k=='downloadURL' and isinstance(x,str): urls.append(x)
+                      walk(x)
+              elif isinstance(v,list):
+                  for x in v: walk(x)
+          walk(record)
+          donor=None
+          for url in urls:
+              with urlopen(Request(url,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r:
+                  data=r.read()
+              try: obj=plistlib.loads(data)
+              except Exception: continue
+              if isinstance(obj,dict) and 'WFWorkflowActions' in obj:
+                  donor=obj
+                  Path('apple_stage2_unsigned.shortcut').write_bytes(data)
+                  break
+          if donor is None:
+              raise SystemExit('No parseable shortcut payload')
+          Path('apple_stage2.plist').write_bytes(plistlib.dumps(donor,fmt=plistlib.FMT_XML,sort_keys=False))
+          print('Client', donor.get('WFWorkflowClientVersion'))
+          print('Minimum', donor.get('WFWorkflowMinimumClientVersion'))
+          print('Actions', len(donor['WFWorkflowActions']))
+          PY
+
+      - name: Generate structural report
+        run: |
+          python3 - <<'PY'
+          import json, plistlib
+          from pathlib import Path
+          from collections import Counter
+
+          sc=plistlib.loads(Path('apple_stage2.plist').read_bytes())
+          actions=sc['WFWorkflowActions']
+          ids=Counter(a.get('WFWorkflowActionIdentifier','') for a in actions)
+
+          def clean(v, depth=0):
+              if depth>5: return '<depth>'
+              if isinstance(v,dict):
+                  out={}
+                  for k,x in v.items():
+                      if k in ('attachmentsByRange','AttachmentsByRange'):
+                          out[k]=clean(x,depth+1)
+                      elif k in ('WFInput','WFVariableName','WFControlFlowMode','GroupingIdentifier','WFCondition','WFConditionalActionString','WFNumberValue','WFAnotherNumber','WFDate','WFAnotherDate','WFContentItemFilter','WFContentItemSortProperty','WFContentItemSortOrder','WFWorkflowActionIdentifier','WFTimeUntilFromDate','WFTimeUntilUnit','WFMathOperation','WFMathOperand','WFNumberActionNumber','WFAdjustOperation','WFDuration','WFDate','WFDateFormatStyle','WFTimeFormatStyle','WFDateFormat','WFCommentActionText','Enabled','FocusModes','state','alarm','AppIntentDescriptor','ShowWhenRun','CustomOutputName','UUID'):
+                          out[k]=clean(x,depth+1)
+                  return out
+              if isinstance(v,list): return [clean(x,depth+1) for x in v]
+              return v
+
+          rows=[]
+          for i,a in enumerate(actions):
+              ident=a.get('WFWorkflowActionIdentifier','')
+              p=a.get('WFWorkflowActionParameters',{})
+              row={'i':i,'id':ident,'p':clean(p)}
+              if ident=='is.workflow.actions.setvariable': row['var']=p.get('WFVariableName')
+              if ident=='com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent':
+                  row['alarm_title']=p.get('alarm',{}).get('title',{}).get('key')
+                  row['alarm_state']=p.get('state',True)
+              if ident=='is.workflow.actions.dnd.set':
+                  row['focus']=p.get('FocusModes',{}).get('DisplayString')
+                  row['focus_enabled']=p.get('Enabled')
+              rows.append(row)
+
+          report={
+              'client':sc.get('WFWorkflowClientVersion'),
+              'minimum':sc.get('WFWorkflowMinimumClientVersion'),
+              'action_count':len(actions),
+              'counts':dict(ids),
+              'actions':rows,
+          }
+          Path('audit_stage2.json').write_text(json.dumps(report,ensure_ascii=False,indent=2))
+
+          print('calendar',ids['is.workflow.actions.filter.calendarevents'])
+          print('alarms',ids['com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent'])
+          print('focus',ids['is.workflow.actions.dnd.set'])
+          print('conditionals',ids['is.workflow.actions.conditional'])
+          print('setvariable',ids['is.workflow.actions.setvariable'])
+          PY
+
+      - name: Upload audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-stage2-audit
+          if-no-files-found: error
+          path: |
+            apple_stage2.plist
+            apple_stage2_unsigned.shortcut
+            audit_stage2.json

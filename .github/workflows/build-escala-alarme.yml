@@ -1,0 +1,342 @@
+name: Build Escala Alarme
+
+on:
+  push:
+    branches:
+      - chatgpt/escala-alarme-build-20260822
+    paths:
+      - 'Escala_Alarme.cherri'
+      - '.github/workflows/build-escala-alarme.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'Escala_Alarme.cherri'
+      - '.github/workflows/build-escala-alarme.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v6
+
+      - name: Fetch iCloud donor Shortcut
+        run: |
+          python3 - <<'PY'
+          import json, plistlib
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+
+          shortcut_id = 'be9afb3352b34715a160b13acf814c96'
+          api = f'https://www.icloud.com/shortcuts/api/records/{shortcut_id}'
+          with urlopen(Request(api, headers={'User-Agent':'Mozilla/5.0'}), timeout=45) as r:
+              record = json.loads(r.read())
+          urls = []
+          def walk(v):
+              if isinstance(v, dict):
+                  for k, x in v.items():
+                      if k == 'downloadURL' and isinstance(x, str): urls.append(x)
+                      walk(x)
+              elif isinstance(v, list):
+                  for x in v: walk(x)
+          walk(record)
+          if not urls:
+              raise SystemExit('No donor download URL found')
+          donor = None
+          for url in urls:
+              with urlopen(Request(url, headers={'User-Agent':'Mozilla/5.0'}), timeout=45) as r:
+                  data = r.read()
+              try:
+                  obj = plistlib.loads(data)
+              except Exception:
+                  continue
+              if isinstance(obj, dict) and 'WFWorkflowActions' in obj:
+                  donor = obj
+                  Path('donor_unsigned.shortcut').write_bytes(data)
+                  break
+          if donor is None:
+              raise SystemExit('Could not parse donor Shortcut')
+          Path('donor.plist').write_bytes(plistlib.dumps(donor, fmt=plistlib.FMT_XML, sort_keys=False))
+          print('Donor actions:', len(donor['WFWorkflowActions']))
+          PY
+
+      - name: Checkout Cherri v2.3.0
+        uses: actions/checkout@v6
+        with:
+          repository: electrikmilk/cherri
+          ref: v2.3.0
+          path: cherri
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: cherri/go.sum
+
+      - name: Compile deterministic base
+        run: |
+          cd cherri
+          go run . ../Escala_Alarme.cherri --debug --skip-sign
+          cd ..
+          test -f "Escala Alarme.plist"
+
+      - name: Inject native iOS actions and calendar ranges
+        run: |
+          python3 - <<'PY'
+          import copy, plistlib, uuid
+          from pathlib import Path
+
+          def U(): return str(uuid.uuid4()).upper()
+          def params(a): return a.get('WFWorkflowActionParameters', {})
+          def clone(a):
+              x = copy.deepcopy(a)
+              if 'UUID' in params(x): params(x)['UUID'] = U()
+              return x
+
+          sc = plistlib.loads(Path('Escala Alarme.plist').read_bytes())
+          donor = plistlib.loads(Path('donor.plist').read_bytes())
+          da = donor['WFWorkflowActions']
+
+          def find_alarm(hour, enabled):
+              for a in da:
+                  if a.get('WFWorkflowActionIdentifier') != 'com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent':
+                      continue
+                  p = params(a)
+                  title = p.get('alarm', {}).get('title', {}).get('key', '')
+                  is_on = p.get('state', True) is not False
+                  if hour in title and is_on == enabled:
+                      return a
+              raise RuntimeError(f'Native donor alarm action not found: {hour} enabled={enabled}')
+
+          def find_focus(name, enabled):
+              for a in da:
+                  if a.get('WFWorkflowActionIdentifier') != 'is.workflow.actions.dnd.set':
+                      continue
+                  p = params(a)
+                  if p.get('Enabled') == enabled and p.get('FocusModes', {}).get('DisplayString') == name:
+                      return a
+              raise RuntimeError(f'Native donor focus action not found: {name} enabled={enabled}')
+
+          templates = {
+              'PATCH_ALARM_OFF_0700': find_alarm('07:00', False),
+              'PATCH_ALARM_OFF_0745': find_alarm('07:45', False),
+              'PATCH_ALARM_ON_0700': find_alarm('07:00', True),
+              'PATCH_ALARM_ON_0745': find_alarm('07:45', True),
+              'PATCH_FOLGA_OFF': find_focus('Folga', False),
+              'PATCH_FOLGA_ON': find_focus('Folga', True),
+              'PATCH_SLEEP_OFF': find_focus('Sono', False),
+              'PATCH_SLEEP_ON': find_focus('Sono', True),
+          }
+
+          actions = sc['WFWorkflowActions']
+          by_name = {}
+          for a in actions:
+              n = params(a).get('CustomOutputName')
+              if n: by_name[n] = a
+          for needed in ['hojeInicio','hojeFim','amanhaInicio','amanhaFim']:
+              if needed not in by_name:
+                  raise SystemExit(f'Missing named date output: {needed}')
+
+          def output_ref(name):
+              a = by_name[name]
+              return {
+                  'Value': {
+                      'OutputUUID': params(a)['UUID'],
+                      'Type': 'ActionOutput',
+                      'OutputName': name,
+                  },
+                  'WFSerializationType': 'WFTextTokenAttachment',
+              }
+
+          filters = [a for a in actions if a.get('WFWorkflowActionIdentifier') == 'is.workflow.actions.filter.calendarevents']
+          if len(filters) != 2:
+              raise SystemExit(f'Expected 2 calendar searches before patch, got {len(filters)}')
+
+          def set_filter(action, start_name, end_name):
+              p = params(action)
+              p['WFContentItemFilter'] = {
+                  'Value': {
+                      'WFActionParameterFilterPrefix': 1,
+                      'WFContentPredicateBoundedDate': False,
+                      'WFActionParameterFilterTemplates': [
+                          {
+                              'Operator': 1003,
+                              'Values': {
+                                  'Date': output_ref(start_name),
+                                  'AnotherDate': output_ref(end_name),
+                              },
+                              'Removable': True,
+                              'Property': 'Start Date',
+                          },
+                          {
+                              'Operator': 4,
+                              'Values': {'Bool': True},
+                              'Removable': True,
+                              'Property': 'Is All Day',
+                          },
+                      ],
+                  },
+                  'WFSerializationType': 'WFContentPredicateTableTemplate',
+              }
+              p['WFContentItemSortOrder'] = 'Oldest First'
+              p['WFContentItemSortProperty'] = 'Start Date'
+
+          set_filter(filters[0], 'hojeInicio', 'hojeFim')
+          set_filter(filters[1], 'amanhaInicio', 'amanhaFim')
+
+          patched = []
+          seen = {k:0 for k in templates}
+          for a in actions:
+              if a.get('WFWorkflowActionIdentifier') == 'is.workflow.actions.comment':
+                  marker = params(a).get('WFCommentActionText')
+                  if marker in templates:
+                      patched.append(clone(templates[marker]))
+                      seen[marker] += 1
+                      continue
+              patched.append(a)
+
+          required_min = {
+              'PATCH_ALARM_OFF_0700':1, 'PATCH_ALARM_OFF_0745':1,
+              'PATCH_ALARM_ON_0700':1, 'PATCH_ALARM_ON_0745':1,
+              'PATCH_FOLGA_OFF':2, 'PATCH_FOLGA_ON':1,
+              'PATCH_SLEEP_OFF':1, 'PATCH_SLEEP_ON':1,
+          }
+          for k,n in required_min.items():
+              if seen[k] != n:
+                  raise SystemExit(f'Marker count mismatch {k}: got {seen[k]}, expected {n}')
+
+          sc['WFWorkflowActions'] = patched
+          Path('Escala Alarme.plist').write_bytes(plistlib.dumps(sc, fmt=plistlib.FMT_XML, sort_keys=False))
+          Path('Escala Alarme_unsigned.shortcut').write_bytes(plistlib.dumps(sc, fmt=plistlib.FMT_BINARY, sort_keys=False))
+          print('Patched actions:', len(patched))
+          PY
+
+      - name: Structural and logic validation
+        run: |
+          python3 - <<'PY'
+          import plistlib
+          from collections import Counter, defaultdict
+          from datetime import date
+          from pathlib import Path
+
+          sc = plistlib.loads(Path('Escala Alarme.plist').read_bytes())
+          actions = sc['WFWorkflowActions']
+          ids = [a.get('WFWorkflowActionIdentifier','') for a in actions]
+          c = Counter(ids)
+          print('Total actions:', len(actions))
+          print('Condition nodes:', c['is.workflow.actions.conditional'])
+          print('Calendar searches:', c['is.workflow.actions.filter.calendarevents'])
+          print('Direct alarm toggles:', c['com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent'])
+          print('Focus actions:', c['is.workflow.actions.dnd.set'])
+          if len(actions) > 320: raise SystemExit('Shortcut unexpectedly large')
+          if c['is.workflow.actions.filter.calendarevents'] != 2: raise SystemExit('Need exactly two calendar searches')
+          if c['com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent'] != 4: raise SystemExit('Need exactly four direct alarm actions')
+          if c['is.workflow.actions.dnd.set'] != 5: raise SystemExit('Need exactly five Focus actions')
+          if any(x.endswith('MTGetAlarmsIntent') for x in ids): raise SystemExit('Find Alarms must not exist')
+
+          raw = repr(sc).lower()
+          for bad in ['patch_', 'com.openai', 'use model', 'usarmodelo', 'corpus christi', 'tiradentes', 'independência do brasil', 'consciência negra']:
+              if bad in raw: raise SystemExit(f'Forbidden content found: {bad}')
+
+          alarms = [a['WFWorkflowActionParameters'] for a in actions if a.get('WFWorkflowActionIdentifier','').endswith('MTToggleAlarmIntent')]
+          entity_ids = {p['alarm']['identifier'] for p in alarms}
+          if entity_ids != {'2D8AB296-8EFA-4B41-BEB2-94358D7CEE2B','1390BE12-4D31-4AB4-A95F-98A6722B5E16'}:
+              raise SystemExit(f'Unexpected alarm entity IDs: {entity_ids}')
+          off = sum(1 for p in alarms if p.get('state', True) is False)
+          on = sum(1 for p in alarms if p.get('state', True) is not False)
+          if (off,on) != (2,2): raise SystemExit(f'Alarm state mix wrong: off={off}, on={on}')
+
+          focuses = [a['WFWorkflowActionParameters'] for a in actions if a.get('WFWorkflowActionIdentifier')=='is.workflow.actions.dnd.set']
+          modes = Counter((p['FocusModes']['DisplayString'], p['Enabled']) for p in focuses)
+          expected = Counter({('Folga',False):2, ('Folga',True):1, ('Sono',False):1, ('Sono',True):1})
+          if modes != expected: raise SystemExit(f'Focus mix wrong: {modes}')
+
+          groups = defaultdict(list)
+          for a in actions:
+              if a.get('WFWorkflowActionIdentifier') == 'is.workflow.actions.conditional':
+                  p=a.get('WFWorkflowActionParameters',{})
+                  groups[p.get('GroupingIdentifier')].append(p.get('WFControlFlowMode'))
+          for g,modes_ in groups.items():
+              if modes_.count(0)!=1 or modes_.count(2)!=1 or modes_.count(1)>1:
+                  raise SystemExit(f'Unbalanced conditional {g}: {modes_}')
+
+          anchor = date(2026,8,17)
+          def state(d):
+              p=(d-anchor).days%21
+              return p, p%7, p<7
+          def alarm(d, kind='normal'):
+              _,dow,mine=state(d)
+              if kind in ('holiday','ashes'):
+                  return '07:45' if mine else None
+              if mine:
+                  if dow < 5: return '07:00'
+                  if dow == 6: return '07:45'
+                  return None
+              return '07:00' if dow < 6 else None
+          tests = [
+              (date(2026,8,23),'normal','07:45'),
+              (date(2026,8,24),'normal','07:00'),
+              (date(2026,8,29),'normal','07:00'),
+              (date(2026,8,30),'normal',None),
+              (date(2026,9,7),'holiday','07:45'),
+          ]
+          for d,k,want in tests:
+              got=alarm(d,k)
+              print(d,k,'=>',got)
+              if got!=want: raise SystemExit(f'Schedule oracle failed {d}: {got} != {want}')
+
+          def working(d,h,kind='normal'):
+              _,dow,mine=state(d)
+              if kind=='holiday': return mine and 8 <= h < 20
+              if kind=='ashes': return (8 <= h < 18) if mine else (12 <= h < 18)
+              if mine:
+                  if dow<5: return 8<=h<18
+                  if dow==5: return 12<=h<20
+                  return 8<=h<20
+              if dow<5: return 8<=h<18
+              if dow==5: return 8<=h<12
+              return False
+          focus_tests = [
+              (date(2026,8,22),8,'normal',False),
+              (date(2026,8,22),12,'normal',True),
+              (date(2026,8,22),20,'normal',False),
+              (date(2026,8,29),8,'normal',True),
+              (date(2026,8,29),12,'normal',False),
+              (date(2026,8,30),12,'normal',False),
+          ]
+          for d,h,k,want in focus_tests:
+              got=working(d,h,k)
+              if got!=want: raise SystemExit(f'Working oracle failed {d} {h}: {got} != {want}')
+          print('Structural and schedule validation OK')
+          PY
+
+      - name: Sign final Shortcut with HubSign
+        run: |
+          python3 - <<'PY'
+          import json, plistlib
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+          sc = plistlib.loads(Path('Escala Alarme.plist').read_bytes())
+          xml = plistlib.dumps(sc, fmt=plistlib.FMT_XML).decode('utf-8')
+          payload = json.dumps({'shortcutName':'Escala Alarme','shortcut':xml}).encode()
+          req = Request('https://hubsign.routinehub.services/sign', data=payload, headers={
+              'Content-Type':'application/json', 'User-Agent':'cherri/2.3.0',
+              'Origin':'https://routinehub.co', 'Referer':'https://routinehub.co/'}, method='POST')
+          with urlopen(req, timeout=45) as r: signed=r.read()
+          if signed[:4] != b'AEA1': raise SystemExit(f'Bad signature payload: {signed[:16]!r}')
+          Path('Escala Alarme.shortcut').write_bytes(signed)
+          print('Signed:',len(signed),'bytes; AEA1 OK')
+          PY
+
+      - name: Upload final build
+        uses: actions/upload-artifact@v4
+        with:
+          name: escala-alarme-final
+          if-no-files-found: error
+          path: |
+            Escala Alarme.shortcut
+            Escala Alarme_unsigned.shortcut
+            Escala Alarme.plist
+            Escala_Alarme.cherri
+            donor.plist

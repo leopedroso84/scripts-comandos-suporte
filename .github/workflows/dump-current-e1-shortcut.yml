@@ -1,0 +1,43 @@
+name: Dump Current e1 Shortcut
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/dump-current-e1-shortcut.yml'
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download shortcut
+        run: |
+          python3 - <<'PY'
+          import json, plistlib, time
+          from urllib.request import Request, urlopen
+          from pathlib import Path
+          sid='e1d9eaf7b24d488aa4076604c10b7acd'
+          api=f'https://www.icloud.com/shortcuts/api/records/{sid}'
+          rec=None
+          for n in range(8):
+              try:
+                  with urlopen(Request(api,headers={'User-Agent':'Mozilla/5.0'}),timeout=30) as r:
+                      rec=json.loads(r.read()); break
+              except Exception as e:
+                  print('retry',n+1,repr(e)); time.sleep(2)
+          if rec is None: raise SystemExit('record unavailable')
+          url=rec['fields']['shortcut']['value']['downloadURL']
+          with urlopen(Request(url,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r:
+              data=r.read()
+          Path('current_e1.shortcut').write_bytes(data)
+          sc=plistlib.loads(data)
+          Path('current_e1.plist').write_bytes(plistlib.dumps(sc,fmt=plistlib.FMT_XML,sort_keys=False))
+          print('actions',len(sc['WFWorkflowActions']))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: current-e1-shortcut
+          path: |
+            current_e1.shortcut
+            current_e1.plist

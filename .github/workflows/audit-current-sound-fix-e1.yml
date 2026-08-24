@@ -1,0 +1,69 @@
+name: Audit Current Sound Fix e1
+
+on:
+  push:
+    branches:
+      - chatgpt/escala-alarme-build-20260822
+    paths:
+      - '.github/workflows/audit-current-sound-fix-e1.yml'
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download and inspect current shortcut
+        run: |
+          python3 - <<'PY'
+          import json, plistlib, time
+          from urllib.request import Request, urlopen
+          from collections import Counter
+
+          sid='e1d9eaf7b24d488aa4076604c10b7acd'
+          api=f'https://www.icloud.com/shortcuts/api/records/{sid}'
+          rec=None
+          for n in range(8):
+              try:
+                  with urlopen(Request(api,headers={'User-Agent':'Mozilla/5.0'}),timeout=30) as r:
+                      rec=json.loads(r.read()); break
+              except Exception as e:
+                  print('retry',n+1,repr(e)); time.sleep(2)
+          if rec is None: raise SystemExit('record unavailable')
+          url=rec['fields']['shortcut']['value']['downloadURL']
+          with urlopen(Request(url,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r:
+              data=r.read()
+          sc=plistlib.loads(data)
+          actions=sc['WFWorkflowActions']
+          print('CLIENT',sc.get('WFWorkflowClientVersion'))
+          print('ACTIONS',len(actions))
+          counts=Counter(a.get('WFWorkflowActionIdentifier','') for a in actions)
+          for ident in [
+            'is.workflow.actions.filter.calendarevents',
+            'com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent',
+            'is.workflow.actions.dnd.set',
+            'com.apple.ShortcutsActions.SetSilentModeAction',
+            'is.workflow.actions.setvolume',
+            'is.workflow.actions.setvariable',
+            'is.workflow.actions.conditional'
+          ]:
+              print('COUNT',ident,counts[ident])
+          print('VARIABLES')
+          for i,a in enumerate(actions):
+              ident=a.get('WFWorkflowActionIdentifier','')
+              p=a.get('WFWorkflowActionParameters',{})
+              if ident=='is.workflow.actions.setvariable':
+                  print(i,p.get('WFVariableName'))
+          print('RELEVANT')
+          keys=('plantao_agora','trabalhando','SetSilentModeAction','Ringtone','Folga','Sono','minha_semana_hoje','tem_feriado_hoje','eh_cinzas_hoje')
+          for i,a in enumerate(actions):
+              ident=a.get('WFWorkflowActionIdentifier','')
+              p=a.get('WFWorkflowActionParameters',{})
+              blob=json.dumps({'id':ident,'p':p},ensure_ascii=False,default=str)
+              if any(k in blob for k in keys) or ident in ('com.apple.ShortcutsActions.SetSilentModeAction','is.workflow.actions.setvolume'):
+                  print('ACTION',i,ident,json.dumps(p,ensure_ascii=False,default=str)[:5000])
+          print('MODEL_SCAN')
+          for i,a in enumerate(actions):
+              ident=a.get('WFWorkflowActionIdentifier','')
+              blob=json.dumps(a,ensure_ascii=False,default=str).lower()
+              if 'model' in ident.lower() or 'chatgpt' in blob or 'appleintelligence' in blob or 'usemodel' in blob:
+                  print('MODEL',i,ident,json.dumps(a.get('WFWorkflowActionParameters',{}),ensure_ascii=False,default=str)[:2000])
+          PY

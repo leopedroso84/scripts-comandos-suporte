@@ -1,0 +1,70 @@
+name: Audit Apple Intelligence Shortcut Stage 1 PR
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/audit-icloud-stage1-pr.yml'
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download iCloud shortcut and inspect
+        run: |
+          python3 - <<'PY'
+          import json, plistlib
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+          from collections import Counter
+
+          shortcut_id='9d41c897d18a46ce8ca3cdfa80c5a29d'
+          api=f'https://www.icloud.com/shortcuts/api/records/{shortcut_id}'
+          with urlopen(Request(api,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r:
+              record=json.loads(r.read())
+          urls=[]
+          def walk(v):
+              if isinstance(v,dict):
+                  for k,x in v.items():
+                      if k=='downloadURL' and isinstance(x,str): urls.append(x)
+                      walk(x)
+              elif isinstance(v,list):
+                  for x in v: walk(x)
+          walk(record)
+          donor=None
+          for url in urls:
+              with urlopen(Request(url,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r:
+                  data=r.read()
+              try: obj=plistlib.loads(data)
+              except Exception: continue
+              if isinstance(obj,dict) and 'WFWorkflowActions' in obj:
+                  donor=obj
+                  Path('apple_stage1_unsigned.shortcut').write_bytes(data)
+                  break
+          if donor is None: raise SystemExit('No parseable shortcut payload')
+          Path('apple_stage1.plist').write_bytes(plistlib.dumps(donor,fmt=plistlib.FMT_XML,sort_keys=False))
+
+          actions=donor['WFWorkflowActions']
+          ids=Counter(a.get('WFWorkflowActionIdentifier','') for a in actions)
+          variables=[]; alarms=[]; focuses=[]; calendar_indexes=[]
+          for i,a in enumerate(actions):
+              p=a.get('WFWorkflowActionParameters',{})
+              ident=a.get('WFWorkflowActionIdentifier','')
+              if ident=='is.workflow.actions.setvariable': variables.append((i,p.get('WFVariableName')))
+              if ident=='com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent': alarms.append((i,p.get('alarm',{}).get('title',{}).get('key'),p.get('state',True)))
+              if ident=='is.workflow.actions.dnd.set': focuses.append((i,p.get('FocusModes',{}).get('DisplayString'),p.get('Enabled')))
+              if ident=='is.workflow.actions.filter.calendarevents': calendar_indexes.append(i)
+          report={'client':donor.get('WFWorkflowClientVersion'),'min':donor.get('WFWorkflowMinimumClientVersion'),'action_count':len(actions),'calendar_count':ids['is.workflow.actions.filter.calendarevents'],'calendar_indexes':calendar_indexes,'alarm_count':ids['com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent'],'alarms':alarms,'focus_count':ids['is.workflow.actions.dnd.set'],'focuses':focuses,'variables':variables}
+          Path('audit.json').write_text(json.dumps(report,ensure_ascii=False,indent=2))
+          print(json.dumps(report,ensure_ascii=False,indent=2))
+          PY
+
+      - name: Upload audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-stage1-audit-pr
+          path: |
+            apple_stage1.plist
+            apple_stage1_unsigned.shortcut
+            audit.json

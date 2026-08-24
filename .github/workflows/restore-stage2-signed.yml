@@ -1,0 +1,87 @@
+name: Restore Signed Working Alarme Trabalho
+
+on:
+  push:
+    branches:
+      - chatgpt/escala-alarme-build-20260822
+    paths:
+      - '.github/workflows/restore-stage2-signed.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/restore-stage2-signed.yml'
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Download exact working Stage 2 backup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 32645917436 \
+            --repo leopedroso84/scripts-comandos-suporte \
+            --name apple-stage2-audit \
+            --dir backup
+          test -f backup/apple_stage2_unsigned.shortcut
+
+      - name: Validate exact saved version
+        run: |
+          python3 - <<'PY'
+          import plistlib
+          from collections import Counter
+          from pathlib import Path
+          p=Path('backup/apple_stage2_unsigned.shortcut')
+          sc=plistlib.loads(p.read_bytes())
+          a=sc['WFWorkflowActions']
+          c=Counter(x.get('WFWorkflowActionIdentifier','') for x in a)
+          print('actions',len(a))
+          print('client',sc.get('WFWorkflowClientVersion'))
+          print('calendar',c['is.workflow.actions.filter.calendarevents'])
+          print('alarms',c['com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent'])
+          print('focus',c['is.workflow.actions.dnd.set'])
+          if len(a)!=205: raise SystemExit('Backup is not the 205-action working version')
+          if c['is.workflow.actions.filter.calendarevents']!=2: raise SystemExit('Calendar count mismatch')
+          if c['com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent']!=6: raise SystemExit('Alarm count mismatch')
+          if c['is.workflow.actions.dnd.set']!=7: raise SystemExit('Focus count mismatch')
+          raw=repr(sc).lower()
+          for bad in ['setsilentmodeaction','is.workflow.actions.setvolume','plantao_agora','chatgpt','appleintelligence']:
+              if bad in raw: raise SystemExit('Unexpected post-update content: '+bad)
+          Path('Alarme Trabalho RESTAURADO_unsigned.shortcut').write_bytes(p.read_bytes())
+          PY
+
+      - name: Sign exact backup with HubSign
+        run: |
+          python3 - <<'PY'
+          import json, plistlib
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+          src=Path('backup/apple_stage2_unsigned.shortcut')
+          sc=plistlib.loads(src.read_bytes())
+          xml=plistlib.dumps(sc,fmt=plistlib.FMT_XML).decode('utf-8')
+          payload=json.dumps({'shortcutName':'Alarme Trabalho','shortcut':xml}).encode()
+          req=Request('https://hubsign.routinehub.services/sign',data=payload,headers={
+              'Content-Type':'application/json',
+              'User-Agent':'cherri/2.3.0',
+              'Origin':'https://routinehub.co',
+              'Referer':'https://routinehub.co/'
+          },method='POST')
+          with urlopen(req,timeout=60) as r:
+              signed=r.read()
+          if signed[:4]!=b'AEA1': raise SystemExit('Signing failed')
+          Path('Alarme Trabalho RESTAURADO.shortcut').write_bytes(signed)
+          print('signed',len(signed),'bytes')
+          PY
+
+      - name: Upload restored shortcut
+        uses: actions/upload-artifact@v4
+        with:
+          name: alarme-trabalho-restaurado-205
+          if-no-files-found: error
+          path: |
+            Alarme Trabalho RESTAURADO.shortcut
+            Alarme Trabalho RESTAURADO_unsigned.shortcut

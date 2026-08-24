@@ -1,0 +1,77 @@
+name: Audit Restored Automation Alarme
+
+on:
+  push:
+    branches:
+      - chatgpt/escala-alarme-build-20260822
+    paths:
+      - '.github/workflows/audit-automation-restored.yml'
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect restored automation shortcut
+        run: |
+          python3 - <<'PY'
+          import json, plistlib, time
+          from urllib.request import Request, urlopen
+          from pathlib import Path
+          from collections import Counter
+
+          sid='9b1ea9fb7a7e4d4a9ac58683ebe7f1b0'
+          api=f'https://www.icloud.com/shortcuts/api/records/{sid}'
+          record=None
+          for n in range(5):
+              try:
+                  with urlopen(Request(api,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r:
+                      record=json.loads(r.read())
+                  break
+              except Exception as e:
+                  print('record_retry',n+1,repr(e)); time.sleep(2)
+          if record is None: raise SystemExit('record unavailable')
+
+          urls=[]
+          def walk(v,path='root'):
+              if isinstance(v,dict):
+                  for k,x in v.items():
+                      p=f'{path}.{k}'
+                      if k=='downloadURL' and isinstance(x,str): urls.append((p,x))
+                      walk(x,p)
+              elif isinstance(v,list):
+                  for i,x in enumerate(v): walk(x,f'{path}[{i}]')
+          walk(record)
+
+          obj=None
+          for path,url in urls:
+              if '.shortcut.' not in path and not path.endswith('shortcut.value.downloadURL'):
+                  continue
+              with urlopen(Request(url,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r:
+                  data=r.read()
+              print('payload',path,'size',len(data),'prefix',data[:8].hex())
+              try:
+                  cand=plistlib.loads(data)
+              except Exception as e:
+                  print('plist_fail',repr(e)); continue
+              print('top_keys',list(cand)[:20] if isinstance(cand,dict) else type(cand).__name__)
+              if isinstance(cand,dict) and 'WFWorkflowActions' in cand:
+                  obj=cand; Path('automation_restored.plist').write_bytes(plistlib.dumps(cand,fmt=plistlib.FMT_XML,sort_keys=False)); break
+          if obj is None: raise SystemExit('no parseable workflow')
+
+          actions=obj['WFWorkflowActions']
+          print('CLIENT',obj.get('WFWorkflowClientVersion'))
+          print('MINIMUM',obj.get('WFWorkflowMinimumClientVersion'))
+          print('ACTION_COUNT',len(actions))
+          counts=Counter(a.get('WFWorkflowActionIdentifier','') for a in actions)
+          print('IDENTIFIER_COUNTS',json.dumps(counts,ensure_ascii=False,sort_keys=True))
+
+          suspicious=('model','silent','volume','ringer','ringtone','plantao','currentdate','date')
+          for i,a in enumerate(actions):
+              ident=a.get('WFWorkflowActionIdentifier','')
+              p=a.get('WFWorkflowActionParameters',{})
+              blob=json.dumps({'id':ident,'p':p},ensure_ascii=False,default=str)
+              print('ACTION',i,ident,json.dumps(p,ensure_ascii=False,default=str)[:3500])
+              low=blob.lower()
+              if any(k in low for k in suspicious):
+                  print('SUSPICIOUS',i,ident)
+          PY
