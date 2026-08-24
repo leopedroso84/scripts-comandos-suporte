@@ -21,7 +21,6 @@ jobs:
           python3 - <<'PY'
           import json, plistlib, time
           from urllib.request import Request, urlopen
-          from collections import Counter
           sid='c9baeee2ae8e49829702dec31f4c5346'
           api=f'https://www.icloud.com/shortcuts/api/records/{sid}'
           rec=None
@@ -48,28 +47,10 @@ jobs:
               except Exception: continue
               if isinstance(cand,dict) and 'WFWorkflowActions' in cand: obj=cand; break
           if obj is None: raise RuntimeError('no parseable payload')
-          a=obj['WFWorkflowActions']; c=Counter(x.get('WFWorkflowActionIdentifier','') for x in a)
-          print('CLIENT',obj.get('WFWorkflowClientVersion'))
+          a=obj['WFWorkflowActions']
           print('ACTIONS',len(a))
-          for ident in ['is.workflow.actions.gettimebetweendates','is.workflow.actions.format.date','is.workflow.actions.calculateexpression','is.workflow.actions.math','is.workflow.actions.filter.calendarevents','com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent','is.workflow.actions.dnd.set','com.apple.ShortcutsActions.SetSilentModeAction','is.workflow.actions.setvolume','is.workflow.actions.setvariable','is.workflow.actions.conditional']:
-              print('COUNT',ident,c[ident])
-          print('VARIABLES')
-          for i,x in enumerate(a):
-              if x.get('WFWorkflowActionIdentifier')=='is.workflow.actions.setvariable':
-                  print('VAR',i,x.get('WFWorkflowActionParameters',{}).get('WFVariableName'))
-          print('PLANTAO_CONTEXT')
-          for i,x in enumerate(a):
-              ident=x.get('WFWorkflowActionIdentifier',''); p=x.get('WFWorkflowActionParameters',{})
-              blob=json.dumps({'id':ident,'p':p},ensure_ascii=False,default=str).lower()
-              if 'plantao_agora' in blob or ident in ('com.apple.ShortcutsActions.SetSilentModeAction','is.workflow.actions.setvolume') or 'ringtone' in blob:
-                  lo=max(0,i-2); hi=min(len(a),i+3)
-                  print('--- around',i,'---')
-                  for j in range(lo,hi):
-                      y=a[j]; print('ACTION',j,y.get('WFWorkflowActionIdentifier',''),json.dumps(y.get('WFWorkflowActionParameters',{}),ensure_ascii=False,default=str)[:4000])
-          print('MODEL_SCAN')
-          for i,x in enumerate(a):
-              ident=x.get('WFWorkflowActionIdentifier','')
-              blob=json.dumps(x,ensure_ascii=False,default=str).lower()
-              if 'model' in ident.lower() or 'chatgpt' in blob or 'appleintelligence' in blob or 'usemodel' in blob:
-                  print('MODEL',i,ident)
+          print('TAIL_FROM_145')
+          for i in range(145,len(a)):
+              x=a[i]
+              print('ACTION',i,x.get('WFWorkflowActionIdentifier',''),json.dumps(x.get('WFWorkflowActionParameters',{}),ensure_ascii=False,default=str)[:6000])
           PY
