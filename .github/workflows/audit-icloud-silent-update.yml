@@ -16,13 +16,13 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Compare pre and post Focus order fix
+      - name: Compare restored shortcut with known-good version
         run: |
           python3 - <<'PY'
           import json, plistlib, time, difflib
           from urllib.request import Request, urlopen
           from collections import Counter
-          IDS={'old':'c9baeee2ae8e49829702dec31f4c5346','new':'5c50ce4c7b5c45f4b6ac522b483a45e2'}
+          IDS={'old':'c9baeee2ae8e49829702dec31f4c5346','new':'1d9848e8af904a029419e5235736f3a2'}
           def load(sid):
               api=f'https://www.icloud.com/shortcuts/api/records/{sid}'
               rec=None
@@ -49,38 +49,32 @@ jobs:
                   if isinstance(obj,dict) and 'WFWorkflowActions' in obj: return obj
               raise RuntimeError('no parseable payload '+sid)
           O={k:load(v) for k,v in IDS.items()}
+          ids=['is.workflow.actions.gettimebetweendates','is.workflow.actions.format.date','is.workflow.actions.calculateexpression','is.workflow.actions.math','is.workflow.actions.filter.calendarevents','com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent','is.workflow.actions.dnd.set','com.apple.ShortcutsActions.SetSilentModeAction','is.workflow.actions.setvolume','is.workflow.actions.setvariable','is.workflow.actions.conditional']
           for k,obj in O.items():
               a=obj['WFWorkflowActions']; c=Counter(x.get('WFWorkflowActionIdentifier','') for x in a)
               print(k,'ACTIONS',len(a))
-              for ident in ['is.workflow.actions.gettimebetweendates','is.workflow.actions.format.date','is.workflow.actions.calculateexpression','is.workflow.actions.math','is.workflow.actions.filter.calendarevents','com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent','is.workflow.actions.dnd.set','com.apple.ShortcutsActions.SetSilentModeAction','is.workflow.actions.setvolume','is.workflow.actions.setvariable','is.workflow.actions.conditional']:
-                  print(k,'COUNT',ident,c[ident])
-              print(k,'FOCUS_ACTIONS')
+              for ident in ids: print(k,'COUNT',ident,c[ident])
+              print(k,'FOCUS')
               for i,x in enumerate(a):
-                  if x.get('WFWorkflowActionIdentifier')=='is.workflow.actions.dnd.set':
-                      p=x.get('WFWorkflowActionParameters',{})
-                      print(k,'FOCUS',i,p.get('FocusModes',{}).get('DisplayString'),p.get('Enabled'),p.get('Operation'))
-              print(k,'ALARMS')
-              for i,x in enumerate(a):
-                  if x.get('WFWorkflowActionIdentifier')=='com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent':
-                      p=x.get('WFWorkflowActionParameters',{})
-                      print(k,'ALARM',i,p.get('alarm',{}).get('title',{}).get('key'),p.get('state'))
+                  ident=x.get('WFWorkflowActionIdentifier',''); p=x.get('WFWorkflowActionParameters',{})
+                  if ident=='is.workflow.actions.dnd.set': print(k,'FOCUS',i,p.get('FocusModes',{}).get('DisplayString'),p.get('Enabled'),p.get('Operation'))
+                  if ident=='com.apple.ShortcutsActions.SetSilentModeAction': print(k,'SILENT',i,p.get('state'),p.get('operation'))
+                  if ident=='is.workflow.actions.setvolume': print(k,'VOLUME',i,p)
+                  if ident=='com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent': print(k,'ALARM',i,p.get('alarm',{}).get('title',{}).get('key'),p.get('state'),p.get('operation'))
           def clean(v):
-              if isinstance(v,dict):
-                  return {k:clean(x) for k,x in v.items() if k not in ('UUID','GroupingIdentifier')}
+              if isinstance(v,dict): return {k:clean(x) for k,x in v.items() if k not in ('UUID','GroupingIdentifier')}
               if isinstance(v,list): return [clean(x) for x in v]
               return v
           old=[json.dumps(clean(x),sort_keys=True,ensure_ascii=False,default=str) for x in O['old']['WFWorkflowActions']]
           new=[json.dumps(clean(x),sort_keys=True,ensure_ascii=False,default=str) for x in O['new']['WFWorkflowActions']]
           sm=difflib.SequenceMatcher(a=old,b=new,autojunk=False)
-          print('OPCODES_NON_EQUAL')
-          for tag,i1,i2,j1,j2 in sm.get_opcodes():
-              if tag!='equal':
-                  print('OP',tag,i1,i2,j1,j2)
-                  for i in range(i1,i2): print('OLD',i,old[i][:1200])
-                  for j in range(j1,j2): print('NEW',j,new[j][:1200])
+          diffs=[]
+          for op in sm.get_opcodes():
+              if op[0]!='equal': diffs.append(op)
+          print('DIFF_BLOCKS',len(diffs))
+          for op in diffs[:20]: print('DIFF',op)
           print('MODEL_SCAN_NEW')
           for i,x in enumerate(O['new']['WFWorkflowActions']):
               ident=x.get('WFWorkflowActionIdentifier',''); blob=json.dumps(x,ensure_ascii=False,default=str).lower()
-              if 'model' in ident.lower() or 'chatgpt' in blob or 'appleintelligence' in blob or 'usemodel' in blob:
-                  print('MODEL',i,ident)
+              if 'model' in ident.lower() or 'chatgpt' in blob or 'appleintelligence' in blob or 'usemodel' in blob: print('MODEL',i,ident)
           PY
