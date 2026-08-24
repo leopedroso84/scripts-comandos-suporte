@@ -6,18 +6,22 @@ on:
       - chatgpt/escala-alarme-build-20260822
     paths:
       - '.github/workflows/audit-icloud-silent-update.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/audit-icloud-silent-update.yml'
 
 jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect alarm popup source
+      - name: Inspect current alarm actions and popup parameters
         run: |
           python3 - <<'PY'
           import json, plistlib, time
           from urllib.request import Request, urlopen
-          from collections import Counter
-          sid='1d9848e8af904a029419e5235736f3a2'
+          sid='512e1e6a3c404f6894c674410f0fed65'
           api=f'https://www.icloud.com/shortcuts/api/records/{sid}'
           rec=None
           for n in range(12):
@@ -45,22 +49,17 @@ jobs:
                   obj=candidate; break
           if obj is None: raise RuntimeError('no parseable payload')
           a=obj['WFWorkflowActions']
-          c=Counter(x.get('WFWorkflowActionIdentifier','') for x in a)
           print('ACTIONS',len(a))
-          print('UNIQUE_IDENTIFIERS')
-          for ident,count in sorted(c.items()): print(count, ident)
-          print('POSSIBLE_UI_ACTIONS')
-          for i,x in enumerate(a):
-              ident=x.get('WFWorkflowActionIdentifier','')
-              low=ident.lower()
-              blob=json.dumps(x,ensure_ascii=False,default=str).lower()
-              if any(s in low for s in ['alert','result','notification','show','prompt','choose','ask']) or any(s in blob for s in ['mostrar ao executar','show when run','showresult','show alert']):
-                  print('UI',i,ident,json.dumps(x.get('WFWorkflowActionParameters',{}),ensure_ascii=False,default=str)[:1600])
-          print('ALARM_NEIGHBORHOODS')
           alarm_id='com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent'
+          print('ALARM_ACTIONS_FULL')
           for i,x in enumerate(a):
               if x.get('WFWorkflowActionIdentifier')==alarm_id:
-                  print('--- ALARM AT',i,'---')
-                  for j in range(max(0,i-2),min(len(a),i+3)):
-                      y=a[j]; print(j,y.get('WFWorkflowActionIdentifier'),json.dumps(y.get('WFWorkflowActionParameters',{}),ensure_ascii=False,default=str)[:1800])
+                  print('--- ALARM',i,'---')
+                  print(json.dumps(x,ensure_ascii=False,default=str,sort_keys=True))
+          print('UI_OR_DIALOG_RELATED_ACTIONS')
+          for i,x in enumerate(a):
+              ident=x.get('WFWorkflowActionIdentifier','')
+              blob=json.dumps(x,ensure_ascii=False,default=str).lower()
+              if any(k in ident.lower() for k in ['alert','result','notification','show','prompt','ask']) or any(k in blob for k in ['show when run','showwhenrun','show_result','showresult','dialog','confirmation']):
+                  print(i,ident,json.dumps(x,ensure_ascii=False,default=str,sort_keys=True)[:4000])
           PY
