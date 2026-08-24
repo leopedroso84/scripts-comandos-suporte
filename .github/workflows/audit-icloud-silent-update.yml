@@ -56,3 +56,4 @@ jobs:
                       print('ALARM_INDEX',i)
                       print(json.dumps(x,ensure_ascii=False,sort_keys=True,default=str))
           PY
+          # rerun marker 2026-08-23T22:41-03:00
