@@ -16,41 +16,71 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect new V2 silent update
+      - name: Compare pre and post Focus order fix
         run: |
           python3 - <<'PY'
-          import json, plistlib, time
+          import json, plistlib, time, difflib
           from urllib.request import Request, urlopen
-          sid='c9baeee2ae8e49829702dec31f4c5346'
-          api=f'https://www.icloud.com/shortcuts/api/records/{sid}'
-          rec=None
-          for n in range(12):
-              try:
-                  with urlopen(Request(api,headers={'User-Agent':'Mozilla/5.0'}),timeout=30) as r:
-                      rec=json.loads(r.read()); break
-              except Exception as e:
-                  print('retry',n+1,repr(e)); time.sleep(2)
-          if rec is None: raise RuntimeError('record unavailable')
-          urls=[]
-          def walk(v):
+          from collections import Counter
+          IDS={'old':'c9baeee2ae8e49829702dec31f4c5346','new':'5c50ce4c7b5c45f4b6ac522b483a45e2'}
+          def load(sid):
+              api=f'https://www.icloud.com/shortcuts/api/records/{sid}'
+              rec=None
+              for n in range(12):
+                  try:
+                      with urlopen(Request(api,headers={'User-Agent':'Mozilla/5.0'}),timeout=30) as r:
+                          rec=json.loads(r.read()); break
+                  except Exception as e:
+                      print('retry',sid,n+1,repr(e)); time.sleep(2)
+              if rec is None: raise RuntimeError('record unavailable '+sid)
+              urls=[]
+              def walk(v):
+                  if isinstance(v,dict):
+                      for k,x in v.items():
+                          if k=='downloadURL' and isinstance(x,str): urls.append(x)
+                          walk(x)
+                  elif isinstance(v,list):
+                      for x in v: walk(x)
+              walk(rec)
+              for url in urls:
+                  with urlopen(Request(url,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r: data=r.read()
+                  try: obj=plistlib.loads(data)
+                  except Exception: continue
+                  if isinstance(obj,dict) and 'WFWorkflowActions' in obj: return obj
+              raise RuntimeError('no parseable payload '+sid)
+          O={k:load(v) for k,v in IDS.items()}
+          for k,obj in O.items():
+              a=obj['WFWorkflowActions']; c=Counter(x.get('WFWorkflowActionIdentifier','') for x in a)
+              print(k,'ACTIONS',len(a))
+              for ident in ['is.workflow.actions.gettimebetweendates','is.workflow.actions.format.date','is.workflow.actions.calculateexpression','is.workflow.actions.math','is.workflow.actions.filter.calendarevents','com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent','is.workflow.actions.dnd.set','com.apple.ShortcutsActions.SetSilentModeAction','is.workflow.actions.setvolume','is.workflow.actions.setvariable','is.workflow.actions.conditional']:
+                  print(k,'COUNT',ident,c[ident])
+              print(k,'FOCUS_ACTIONS')
+              for i,x in enumerate(a):
+                  if x.get('WFWorkflowActionIdentifier')=='is.workflow.actions.dnd.set':
+                      p=x.get('WFWorkflowActionParameters',{})
+                      print(k,'FOCUS',i,p.get('FocusModes',{}).get('DisplayString'),p.get('Enabled'),p.get('Operation'))
+              print(k,'ALARMS')
+              for i,x in enumerate(a):
+                  if x.get('WFWorkflowActionIdentifier')=='com.apple.mobiletimer-framework.MobileTimerIntents.MTToggleAlarmIntent':
+                      p=x.get('WFWorkflowActionParameters',{})
+                      print(k,'ALARM',i,p.get('alarm',{}).get('title',{}).get('key'),p.get('state'))
+          def clean(v):
               if isinstance(v,dict):
-                  for k,x in v.items():
-                      if k=='downloadURL' and isinstance(x,str): urls.append(x)
-                      walk(x)
-              elif isinstance(v,list):
-                  for x in v: walk(x)
-          walk(rec)
-          obj=None
-          for url in urls:
-              with urlopen(Request(url,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r: data=r.read()
-              try: cand=plistlib.loads(data)
-              except Exception: continue
-              if isinstance(cand,dict) and 'WFWorkflowActions' in cand: obj=cand; break
-          if obj is None: raise RuntimeError('no parseable payload')
-          a=obj['WFWorkflowActions']
-          print('ACTIONS',len(a))
-          print('TAIL_FROM_145')
-          for i in range(145,len(a)):
-              x=a[i]
-              print('ACTION',i,x.get('WFWorkflowActionIdentifier',''),json.dumps(x.get('WFWorkflowActionParameters',{}),ensure_ascii=False,default=str)[:6000])
+                  return {k:clean(x) for k,x in v.items() if k not in ('UUID','GroupingIdentifier')}
+              if isinstance(v,list): return [clean(x) for x in v]
+              return v
+          old=[json.dumps(clean(x),sort_keys=True,ensure_ascii=False,default=str) for x in O['old']['WFWorkflowActions']]
+          new=[json.dumps(clean(x),sort_keys=True,ensure_ascii=False,default=str) for x in O['new']['WFWorkflowActions']]
+          sm=difflib.SequenceMatcher(a=old,b=new,autojunk=False)
+          print('OPCODES_NON_EQUAL')
+          for tag,i1,i2,j1,j2 in sm.get_opcodes():
+              if tag!='equal':
+                  print('OP',tag,i1,i2,j1,j2)
+                  for i in range(i1,i2): print('OLD',i,old[i][:1200])
+                  for j in range(j1,j2): print('NEW',j,new[j][:1200])
+          print('MODEL_SCAN_NEW')
+          for i,x in enumerate(O['new']['WFWorkflowActions']):
+              ident=x.get('WFWorkflowActionIdentifier',''); blob=json.dumps(x,ensure_ascii=False,default=str).lower()
+              if 'model' in ident.lower() or 'chatgpt' in blob or 'appleintelligence' in blob or 'usemodel' in blob:
+                  print('MODEL',i,ident)
           PY
